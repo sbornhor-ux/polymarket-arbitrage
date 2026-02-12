@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+
+# Local data (don't commit to git, will be created in cloud)
+prediction_markets.db
+*.log
+
+# Output files (generated, uploaded to R2)
+scan_results_*.json
+scan_results_*.csv
+latest_scan.json
+latest_scan.csv
+test_report_*.html
+market_comparison_report.html
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+nul
