@@ -25,11 +25,15 @@ import time
 import json
 import sqlite3
 import logging
+import gc
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 import schedule
+
+# Memory-efficient settings
+MAX_PAGES = int(os.environ.get('MAX_PAGES', 50))  # 50 pages = 25k markets max
 
 # Configure logging
 logging.basicConfig(
@@ -262,25 +266,68 @@ class CloudRunner:
         self.scan_interval = int(os.environ.get('SCAN_INTERVAL_MINUTES', 60))
 
     def fetch_and_store_markets(self):
-        """Fetch markets from API and store in database."""
-        logger.info("Fetching markets from Polymarket API...")
+        """Fetch markets from API and store in database (memory-efficient)."""
+        logger.info(f"Fetching markets from Polymarket API (max {MAX_PAGES} pages)...")
+
+        total_fetched = 0
+        finance_count = 0
+        offset = 0
+        page = 0
 
         try:
-            # Fetch all markets
-            all_markets = self.client.fetch_all_markets()
-            logger.info(f"Fetched {len(all_markets)} total markets")
+            while page < MAX_PAGES:
+                # Fetch one page at a time
+                params = {
+                    "limit": self.config.API_PAGE_SIZE,
+                    "offset": offset,
+                    "active": "true",
+                }
 
-            # Filter for finance markets
-            finance_markets = self.client.filter_finance_markets(all_markets)
-            logger.info(f"Filtered to {len(finance_markets)} finance markets")
+                try:
+                    response = requests.get(
+                        self.config.POLYMARKET_API_URL,
+                        params=params,
+                        timeout=60
+                    )
+                    response.raise_for_status()
+                    markets = response.json()
 
-            # Store markets and snapshots
-            for market in finance_markets:
-                self.db.upsert_market(market)
-                self.db.add_snapshot(market)
+                    if not markets:
+                        break
 
-            logger.info(f"Stored {len(finance_markets)} market snapshots")
-            return len(finance_markets)
+                    total_fetched += len(markets)
+                    page += 1
+
+                    # Filter and store immediately (don't keep in memory)
+                    for market in markets:
+                        if self.client.is_finance_market(market):
+                            # Check volume threshold
+                            try:
+                                volume = float(market.get('volume', 0) or 0)
+                            except (ValueError, TypeError):
+                                volume = 0
+
+                            if volume >= self.config.MIN_MARKET_VOLUME:
+                                self.db.upsert_market(market)
+                                self.db.add_snapshot(market)
+                                finance_count += 1
+
+                    # Clear the markets list to free memory
+                    del markets
+
+                    if page % 10 == 0:
+                        logger.info(f"  Page {page}: {total_fetched} fetched, {finance_count} finance markets stored")
+                        gc.collect()  # Force garbage collection
+
+                    offset += self.config.API_PAGE_SIZE
+
+                except requests.RequestException as e:
+                    logger.warning(f"API error at page {page}: {e}")
+                    break
+
+            logger.info(f"Fetched {total_fetched} total markets, stored {finance_count} finance markets")
+            gc.collect()
+            return finance_count
 
         except Exception as e:
             logger.error(f"Error fetching markets: {e}")
@@ -377,6 +424,7 @@ class CloudRunner:
 
         # Step 1: Fetch and store
         market_count = self.fetch_and_store_markets()
+        gc.collect()  # Free memory after fetch
 
         if market_count == 0:
             logger.warning("No markets fetched, skipping analysis")
@@ -384,14 +432,17 @@ class CloudRunner:
 
         # Step 2: Run analysis
         result = self.run_analysis()
+        gc.collect()  # Free memory after analysis
 
         # Step 3: Upload to R2
         if result:
             self.upload_to_r2(result)
 
-        # Step 4: Cleanup old data (weekly)
+        # Step 4: Cleanup old data
         self.db.cleanup_old_snapshots(days=7)
 
+        # Final cleanup
+        gc.collect()
         logger.info("Scan cycle complete")
 
     def run_scheduled(self):
