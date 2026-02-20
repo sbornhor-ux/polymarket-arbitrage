@@ -27,8 +27,6 @@ import sqlite3
 import logging
 import gc
 from datetime import datetime, timezone
-from pathlib import Path
-
 import requests
 import schedule
 
@@ -134,7 +132,7 @@ class DatabaseManager:
         self._ensure_tables()
 
     def _ensure_tables(self):
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist, and migrate new columns."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -143,6 +141,7 @@ class DatabaseManager:
                 market_id TEXT PRIMARY KEY,
                 question TEXT,
                 description TEXT,
+                resolution_criteria TEXT,
                 category TEXT,
                 volume REAL,
                 liquidity REAL,
@@ -157,8 +156,12 @@ class DatabaseManager:
                 market_id TEXT,
                 timestamp TEXT,
                 yes_price REAL,
+                bid REAL,
+                ask REAL,
                 volume REAL,
                 liquidity REAL,
+                open_interest REAL,
+                n_trades INTEGER,
                 status TEXT
             )
         ''')
@@ -173,6 +176,20 @@ class DatabaseManager:
             ON market_snapshots(timestamp)
         ''')
 
+        # Migrate existing databases — add new columns if missing
+        migrations = [
+            ("markets", "resolution_criteria", "TEXT"),
+            ("market_snapshots", "bid", "REAL"),
+            ("market_snapshots", "ask", "REAL"),
+            ("market_snapshots", "open_interest", "REAL"),
+            ("market_snapshots", "n_trades", "INTEGER"),
+        ]
+        for table, col, col_type in migrations:
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
         conn.commit()
         conn.close()
         logger.info("Database tables verified")
@@ -182,14 +199,22 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        # resolution_criteria: use dedicated field or fall back to description
+        resolution_criteria = (
+            market.get('resolutionCriteria') or
+            market.get('resolutionSource') or
+            market.get('description') or ''
+        )
+
         cursor.execute('''
             INSERT OR REPLACE INTO markets
-            (market_id, question, description, category, volume, liquidity, end_date, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (market_id, question, description, resolution_criteria, category, volume, liquidity, end_date, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             str(market.get('id', '')),
             market.get('question', ''),
             market.get('description', ''),
+            resolution_criteria,
             market.get('category', 'uncategorized'),
             float(market.get('volume', 0) or 0),
             float(market.get('liquidity', 0) or 0),
@@ -205,24 +230,57 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Parse price from outcomePrices
-        price = 0.0
+        # Parse mid price from outcomePrices (YES outcome)
+        yes_price = 0.0
         try:
             prices_str = market.get('outcomePrices', '[0]')
-            price = float(prices_str.strip('[]').split(',')[0])
+            yes_price = float(prices_str.strip('[]').split(',')[0])
         except (ValueError, TypeError, IndexError):
             pass
 
+        # Bid / ask
+        def _f(val):
+            try:
+                return float(val) if val is not None else None
+            except (ValueError, TypeError):
+                return None
+
+        bid = _f(market.get('bestBid'))
+        ask = _f(market.get('bestAsk'))
+
+        # If bid/ask missing, approximate from outcomePrices spread
+        if bid is None and ask is None and yes_price > 0:
+            bid = yes_price
+            ask = yes_price
+
+        # Trade count
+        n_trades = None
+        for key in ('tradesCount', 'numTrades', 'tradeCount'):
+            raw = market.get(key)
+            if raw is not None:
+                try:
+                    n_trades = int(raw)
+                except (ValueError, TypeError):
+                    pass
+                break
+
+        # Open interest
+        open_interest = _f(market.get('openInterest'))
+
         cursor.execute('''
             INSERT INTO market_snapshots
-            (market_id, timestamp, yes_price, volume, liquidity, status)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (market_id, timestamp, yes_price, bid, ask, volume, liquidity, open_interest, n_trades, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             str(market.get('id', '')),
             datetime.now(timezone.utc).isoformat(),
-            price,
+            yes_price,
+            bid,
+            ask,
             float(market.get('volume', 0) or 0),
             float(market.get('liquidity', 0) or 0),
+            open_interest,
+            n_trades,
             'active' if market.get('active') else 'inactive'
         ))
 

@@ -126,9 +126,13 @@ class MarketSnapshot:
     """A point-in-time snapshot of a market."""
     market_id: str
     timestamp: datetime
-    price: float
+    price: float       # mid price (yes_price)
     volume: float
     liquidity: float
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    open_interest: Optional[float] = None
+    n_trades: Optional[int] = None
 
 
 @dataclass
@@ -138,6 +142,7 @@ class MarketData:
     market_id: str
     question: str
     description: str
+    resolution_criteria: str
     category: str
     end_date: Optional[str]
 
@@ -150,6 +155,10 @@ class MarketData:
     price_history: List[Tuple[datetime, float]] = field(default_factory=list)
     volume_history: List[Tuple[datetime, float]] = field(default_factory=list)
     liquidity_history: List[Tuple[datetime, float]] = field(default_factory=list)
+    bid_history: List[Tuple[datetime, Optional[float]]] = field(default_factory=list)
+    ask_history: List[Tuple[datetime, Optional[float]]] = field(default_factory=list)
+    open_interest_history: List[Tuple[datetime, Optional[float]]] = field(default_factory=list)
+    n_trades_history: List[Tuple[datetime, Optional[int]]] = field(default_factory=list)
 
     # Stage 1: Composite score components
     odds_swing_pct: float = 0.0
@@ -184,15 +193,44 @@ class MarketData:
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON output."""
+        # Build unified time_series from snapshot history
+        # Use price_history as the alignment axis (all series share the same timestamps)
+        dates = [ts.isoformat() for ts, _ in self.price_history]
+
+        def _series(history):
+            return [v for _, v in history] if history else []
+
+        def _round_series(history, decimals=4):
+            return [round(v, decimals) if v is not None else None for _, v in history] if history else []
+
+        # Mid price = (bid + ask) / 2 if available, else fall back to yes_price
+        mid_prices = []
+        for i, (ts, yp) in enumerate(self.price_history):
+            b = self.bid_history[i][1] if i < len(self.bid_history) else None
+            a = self.ask_history[i][1] if i < len(self.ask_history) else None
+            if b is not None and a is not None:
+                mid_prices.append(round((b + a) / 2, 4))
+            else:
+                mid_prices.append(round(yp, 4))
+
         return {
             "market_id": self.market_id,
             "question": self.question,
-            "description": self.description[:500] if self.description else "",
             "category": self.category,
             "end_date": self.end_date,
+            "resolution_criteria": self.resolution_criteria[:1000] if self.resolution_criteria else "",
             "current_price": self.current_price,
             "current_volume": self.current_volume,
             "current_liquidity": self.current_liquidity,
+            "time_series": {
+                "dates": dates,
+                "mid_price": mid_prices,
+                "volume": _round_series(self.volume_history, 2),
+                "bid": _round_series(self.bid_history, 4),
+                "ask": _round_series(self.ask_history, 4),
+                "open_interest": _round_series(self.open_interest_history, 2),
+                "n_trades": _series(self.n_trades_history),
+            },
             "odds_swing_pct": round(self.odds_swing_pct, 4),
             "volume_surge_pct": round(self.volume_surge_pct, 4),
             "composite_score": round(self.composite_score, 4),
@@ -349,7 +387,8 @@ class SnapshotDB:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT market_id, timestamp, yes_price, volume, liquidity
+                SELECT market_id, timestamp, yes_price, volume, liquidity,
+                       bid, ask, open_interest, n_trades
                 FROM market_snapshots
                 WHERE market_id = ? AND timestamp >= ?
                 ORDER BY timestamp ASC
@@ -364,9 +403,13 @@ class SnapshotDB:
                     snapshots.append(MarketSnapshot(
                         market_id=str(row[0]),
                         timestamp=datetime.fromisoformat(row[1]) if row[1] else datetime.utcnow(),
-                        price=float(row[2]) if row[2] else 0.0,
-                        volume=float(row[3]) if row[3] else 0.0,
-                        liquidity=float(row[4]) if row[4] else 0.0,
+                        price=float(row[2]) if row[2] is not None else 0.0,
+                        volume=float(row[3]) if row[3] is not None else 0.0,
+                        liquidity=float(row[4]) if row[4] is not None else 0.0,
+                        bid=float(row[5]) if row[5] is not None else None,
+                        ask=float(row[6]) if row[6] is not None else None,
+                        open_interest=float(row[7]) if row[7] is not None else None,
+                        n_trades=int(row[8]) if row[8] is not None else None,
                     ))
                 except (ValueError, TypeError):
                     continue
@@ -409,7 +452,8 @@ class SnapshotDB:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT market_id, question, description, category, volume, liquidity
+                SELECT market_id, question, description, resolution_criteria,
+                       category, volume, liquidity, end_date
                 FROM markets
             """)
 
@@ -419,9 +463,11 @@ class SnapshotDB:
                     'id': row[0],
                     'question': row[1] or '',
                     'description': row[2] or '',
-                    'category': row[3] or 'uncategorized',
-                    'volume': row[4] or 0,
-                    'liquidity': row[5] or 0,
+                    'resolutionCriteria': row[3] or '',
+                    'category': row[4] or 'uncategorized',
+                    'volume': row[5] or 0,
+                    'liquidity': row[6] or 0,
+                    'endDate': row[7],
                 }
                 markets.append(market)
 
@@ -439,7 +485,8 @@ class SnapshotDB:
             cursor = conn.cursor()
 
             cursor.execute("""
-                SELECT market_id, timestamp, yes_price, volume, liquidity
+                SELECT market_id, timestamp, yes_price, volume, liquidity,
+                       bid, ask, open_interest, n_trades
                 FROM market_snapshots
                 WHERE market_id = ?
                 ORDER BY timestamp ASC
@@ -454,9 +501,13 @@ class SnapshotDB:
                     snapshots.append(MarketSnapshot(
                         market_id=str(row[0]),
                         timestamp=datetime.fromisoformat(row[1]) if row[1] else datetime.utcnow(),
-                        price=float(row[2]) if row[2] else 0.0,
-                        volume=float(row[3]) if row[3] else 0.0,
-                        liquidity=float(row[4]) if row[4] else 0.0,
+                        price=float(row[2]) if row[2] is not None else 0.0,
+                        volume=float(row[3]) if row[3] is not None else 0.0,
+                        liquidity=float(row[4]) if row[4] is not None else 0.0,
+                        bid=float(row[5]) if row[5] is not None else None,
+                        ask=float(row[6]) if row[6] is not None else None,
+                        open_interest=float(row[7]) if row[7] is not None else None,
+                        n_trades=int(row[8]) if row[8] is not None else None,
                     ))
                 except (ValueError, TypeError):
                     continue
@@ -931,10 +982,17 @@ class PolymarketScanner:
             except (ValueError, TypeError):
                 pass
 
+            resolution_criteria = (
+                market.get('resolutionCriteria') or
+                market.get('resolutionSource') or
+                market.get('description') or ''
+            )
+
             md = MarketData(
                 market_id=market_id,
                 question=market.get('question', ''),
                 description=market.get('description', ''),
+                resolution_criteria=resolution_criteria,
                 category=market.get('category', 'uncategorized'),
                 end_date=market.get('endDate'),
                 current_price=price,
@@ -952,6 +1010,10 @@ class PolymarketScanner:
                     md.price_history = [(s.timestamp, s.price) for s in snapshots]
                     md.volume_history = [(s.timestamp, s.volume) for s in snapshots]
                     md.liquidity_history = [(s.timestamp, s.liquidity) for s in snapshots]
+                    md.bid_history = [(s.timestamp, s.bid) for s in snapshots]
+                    md.ask_history = [(s.timestamp, s.ask) for s in snapshots]
+                    md.open_interest_history = [(s.timestamp, s.open_interest) for s in snapshots]
+                    md.n_trades_history = [(s.timestamp, s.n_trades) for s in snapshots]
 
             market_data_list.append(md)
 
@@ -1046,10 +1108,17 @@ class PolymarketScanner:
             # Use latest snapshot for current values
             latest = snapshots[-1]
 
+            resolution_criteria = (
+                market.get('resolutionCriteria') or
+                market.get('resolutionSource') or
+                market.get('description') or ''
+            )
+
             md = MarketData(
                 market_id=market_id,
                 question=market.get('question', ''),
                 description=market.get('description', ''),
+                resolution_criteria=resolution_criteria,
                 category=market.get('category', 'uncategorized'),
                 end_date=market.get('endDate'),
                 current_price=latest.price,
@@ -1058,6 +1127,10 @@ class PolymarketScanner:
                 price_history=[(s.timestamp, s.price) for s in snapshots],
                 volume_history=[(s.timestamp, s.volume) for s in snapshots],
                 liquidity_history=[(s.timestamp, s.liquidity) for s in snapshots],
+                bid_history=[(s.timestamp, s.bid) for s in snapshots],
+                ask_history=[(s.timestamp, s.ask) for s in snapshots],
+                open_interest_history=[(s.timestamp, s.open_interest) for s in snapshots],
+                n_trades_history=[(s.timestamp, s.n_trades) for s in snapshots],
             )
 
             market_data_list.append(md)
