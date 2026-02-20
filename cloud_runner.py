@@ -78,6 +78,18 @@ class R2Storage:
             logger.warning("R2 storage disabled - missing credentials")
             self.client = None
 
+    def download_file(self, remote_key: str, local_path: str) -> bool:
+        """Download a file from R2. Returns True if successful."""
+        if not self.enabled:
+            return False
+        try:
+            self.client.download_file(self.bucket_name, remote_key, local_path)
+            logger.info(f"Downloaded from R2: {remote_key} -> {local_path}")
+            return True
+        except Exception as e:
+            logger.info(f"R2 download skipped ({remote_key}): {e}")
+            return False
+
     def upload_file(self, local_path: str, remote_key: str, content_type: str = None):
         """Upload a file to R2."""
         if not self.enabled:
@@ -313,15 +325,36 @@ class DatabaseManager:
 class CloudRunner:
     """Main orchestrator for cloud-based scanning."""
 
+    DB_PATH = 'prediction_markets.db'
+
     def __init__(self):
         self.config = ScannerConfig()
         self.config.MIN_MARKET_VOLUME = int(os.environ.get('MIN_MARKET_VOLUME', 10000))
 
         self.client = PolymarketClient(self.config)
-        self.db = DatabaseManager()
         self.r2 = R2Storage()
 
+        # Restore DB from R2 on startup so history survives redeploys
+        self._restore_db_from_r2()
+
+        self.db = DatabaseManager(self.DB_PATH)
         self.scan_interval = int(os.environ.get('SCAN_INTERVAL_MINUTES', 60))
+
+    def _restore_db_from_r2(self):
+        """Download the database from R2 if it doesn't exist locally."""
+        import os
+        if os.path.exists(self.DB_PATH):
+            size = os.path.getsize(self.DB_PATH)
+            logger.info(f"Local database found ({size:,} bytes), skipping restore")
+            return
+
+        logger.info("No local database found — attempting restore from R2...")
+        success = self.r2.download_file('prediction_markets.db', self.DB_PATH)
+        if success:
+            size = os.path.getsize(self.DB_PATH)
+            logger.info(f"Database restored from R2 ({size:,} bytes)")
+        else:
+            logger.info("No R2 backup found — starting with fresh database")
 
     def fetch_and_store_markets(self):
         """Fetch markets from API and store in database (memory-efficient)."""
