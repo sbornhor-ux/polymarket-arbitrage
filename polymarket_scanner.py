@@ -16,7 +16,7 @@ import json
 import csv
 import math
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
@@ -979,8 +979,18 @@ class PolymarketScanner:
         print("  Loading historical data...")
         market_data_list = []
 
+        now_iso = datetime.now(timezone.utc).isoformat()
         for market in finance_markets:
             market_id = str(market.get('id', ''))
+
+            # Skip markets that have already closed
+            end_date_str = market.get('endDate') or market.get('end_date')
+            if end_date_str:
+                try:
+                    if end_date_str.replace('Z', '+00:00') < now_iso:
+                        continue
+                except (TypeError, AttributeError):
+                    pass
 
             # Get volume
             volume = 0
