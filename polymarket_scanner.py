@@ -213,6 +213,31 @@ class MarketData:
             else:
                 mid_prices.append(round(yp, 4))
 
+        # Build daily_series: resample to one observation per calendar day
+        # (last snapshot of each day) for Trend Analyst statistical tests.
+        # Output YYYY-MM-DD dates and daily closing mid_price / volume.
+        daily_series = {"dates": [], "probability": [], "volume": []}
+        if self.price_history:
+            # Group indices by calendar date (UTC)
+            from collections import OrderedDict
+            day_map: OrderedDict = OrderedDict()
+            for i, (ts, _) in enumerate(self.price_history):
+                day_key = ts.strftime("%Y-%m-%d") if hasattr(ts, 'strftime') else str(ts)[:10]
+                day_map[day_key] = i  # keeps last index for each day
+
+            for day_key, idx in day_map.items():
+                ts, yp = self.price_history[idx]
+                b = self.bid_history[idx][1] if idx < len(self.bid_history) else None
+                a = self.ask_history[idx][1] if idx < len(self.ask_history) else None
+                if b is not None and a is not None:
+                    prob = round((b + a) / 2, 4)
+                else:
+                    prob = round(yp, 4)
+                vol = self.volume_history[idx][1] if idx < len(self.volume_history) else None
+                daily_series["dates"].append(day_key)
+                daily_series["probability"].append(prob)
+                daily_series["volume"].append(round(vol, 2) if vol is not None else None)
+
         return {
             "market_id": self.market_id,
             "question": self.question,
@@ -231,6 +256,7 @@ class MarketData:
                 "open_interest": _round_series(self.open_interest_history, 2),
                 "n_trades": _series(self.n_trades_history),
             },
+            "daily_series": daily_series,
             "odds_swing_pct": round(self.odds_swing_pct, 4),
             "volume_surge_pct": round(self.volume_surge_pct, 4),
             "composite_score": round(self.composite_score, 4),

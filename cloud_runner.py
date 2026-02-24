@@ -529,8 +529,8 @@ class CloudRunner:
         if result:
             self.upload_to_r2(result)
 
-        # Step 4: Cleanup old data
-        self.db.cleanup_old_snapshots(days=7)
+        # Step 4: Cleanup old data (keep 90 days for Trend Analyst statistical tests)
+        self.db.cleanup_old_snapshots(days=90)
 
         # Final cleanup
         gc.collect()
