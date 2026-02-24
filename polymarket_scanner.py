@@ -35,9 +35,9 @@ class ScannerConfig:
     WEIGHT_VOLUME_SURGE = 0.25    # Capital flow confirms conviction
 
     # --- Stage 1: Thresholds ---
-    COMPOSITE_SCORE_CUTOFF = 0.15  # Minimum score to pass initial filter (0-1 scale)
-    TOP_PERCENT_FOR_DEEP_ANALYSIS = 0.25  # Top 25% get deep analysis
-    MIN_MARKET_VOLUME = 10000      # Minimum volume to consider ($)
+    COMPOSITE_SCORE_CUTOFF = 0.05  # Minimum score to pass initial filter (0-1 scale)
+    TOP_PERCENT_FOR_DEEP_ANALYSIS = 0.50  # Top 50% get deep analysis
+    MIN_MARKET_VOLUME = 5000       # Minimum volume to consider ($)
 
     # --- Lookback ---
     LOOKBACK_HOURS = 24            # How far back to analyze
@@ -390,6 +390,8 @@ class PolymarketClient:
                 "limit": self.config.API_PAGE_SIZE,
                 "offset": offset,
                 "active": "true",
+                "order": "volume24hr",
+                "ascending": "false",
             }
 
             try:

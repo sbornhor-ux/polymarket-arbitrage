@@ -424,6 +424,8 @@ class CloudRunner:
                     "limit": self.config.API_PAGE_SIZE,
                     "offset": offset,
                     "active": "true",
+                    "order": "volume24hr",
+                    "ascending": "false",
                 }
 
                 try:
@@ -455,7 +457,8 @@ class CloudRunner:
 
                         if self.client.is_finance_market(market):
                             try:
-                                volume = float(market.get('volume', 0) or 0)
+                                # Use 24-hour volume: only store markets actively trading today
+                                volume = float(market.get('volume24hr', 0) or market.get('volume', 0) or 0)
                             except (ValueError, TypeError):
                                 volume = 0
 
