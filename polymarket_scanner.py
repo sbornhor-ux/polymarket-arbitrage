@@ -35,8 +35,8 @@ class ScannerConfig:
     WEIGHT_VOLUME_SURGE = 0.25    # Capital flow confirms conviction
 
     # --- Stage 1: Thresholds ---
-    COMPOSITE_SCORE_CUTOFF = 0.3   # Minimum score to pass initial filter (0-1 scale)
-    TOP_PERCENT_FOR_DEEP_ANALYSIS = 0.10  # Top 10% get deep analysis
+    COMPOSITE_SCORE_CUTOFF = 0.15  # Minimum score to pass initial filter (0-1 scale)
+    TOP_PERCENT_FOR_DEEP_ANALYSIS = 0.25  # Top 25% get deep analysis
     MIN_MARKET_VOLUME = 10000      # Minimum volume to consider ($)
 
     # --- Lookback ---
