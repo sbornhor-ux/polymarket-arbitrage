@@ -44,26 +44,86 @@ class ScannerConfig:
 
     # --- Finance Keywords (include) ---
     FINANCE_KEYWORDS = [
+        # --- Equities & Markets ---
         'stock', 'stocks', 'share', 'shares', 'equity', 'equities',
         'market', 'markets', 'trading', 'trader', 'trade',
-        'price', 'prices', 'valuation',
+        'price', 'prices', 'valuation', 'market cap',
+        's&p', 'sp500', 'dow', 'nasdaq', 'russell', 'ftse', 'dax', 'nikkei',
+        'bull', 'bear', 'rally', 'crash', 'correction', 'selloff', 'rebound',
+        'short squeeze', 'short selling', 'options', 'futures', 'derivatives',
+        'calls', 'puts', 'hedge', 'hedging', 'arbitrage',
+
+        # --- Central Banks & Monetary Policy ---
         'fed', 'federal reserve', 'interest rate', 'rates', 'fomc',
-        'inflation', 'cpi', 'ppi', 'gdp', 'recession', 'economy', 'economic',
+        'rate hike', 'rate cut', 'basis points', 'bps',
+        'ecb', 'european central bank', 'bank of japan', 'boj',
+        'bank of england', 'boe', 'pboc', 'peoples bank of china',
+        'quantitative easing', 'qe', 'quantitative tightening', 'qt',
+        'tapering', 'monetary policy', 'tightening', 'easing',
+        'balance sheet', 'reserve', 'liquidity',
+
+        # --- Macro Indicators ---
+        'inflation', 'cpi', 'ppi', 'pce', 'core inflation',
+        'gdp', 'recession', 'economy', 'economic', 'growth',
+        'stagflation', 'deflation', 'hyperinflation',
+        'unemployment', 'jobs', 'payroll', 'labor', 'nfp', 'non-farm',
+        'consumer confidence', 'retail sales', 'trade balance',
+        'current account', 'pmi', 'ism', 'manufacturing',
+        'housing starts', 'building permits', 'existing home sales',
+        'gdp growth', 'economic output', 'productivity',
+
+        # --- Fixed Income ---
         'treasury', 'bond', 'bonds', 'yield', 'yields',
+        'yield curve', 'inversion', 'spread', 'credit',
+        'sovereign debt', 'credit rating', 'downgrade', 'upgrade',
+        'junk bond', 'high yield', 'investment grade', 'duration',
+
+        # --- Banking & Corporate Finance ---
         'bank', 'banks', 'banking', 'financial', 'finance',
-        'oil', 'gold', 'silver', 'commodity', 'commodities',
-        'dollar', 'euro', 'yen', 'currency', 'forex', 'fx',
-        'tariff', 'tariffs', 'trade war', 'sanctions',
-        's&p', 'sp500', 'dow', 'nasdaq', 'russell',
-        'earnings', 'revenue', 'profit', 'dividend',
+        'earnings', 'revenue', 'profit', 'dividend', 'eps',
         'ipo', 'merger', 'acquisition', 'buyout', 'bankruptcy',
-        'sec', 'regulation', 'antitrust',
-        'unemployment', 'jobs', 'payroll', 'labor',
-        'housing', 'mortgage', 'real estate',
+        'private equity', 'venture capital', 'spac', 'leverage', 'margin',
+        'sec', 'regulation', 'antitrust', 'fdic', 'occ',
+
+        # --- Currencies & FX ---
+        'dollar', 'euro', 'yen', 'currency', 'forex', 'fx',
+        'yuan', 'renminbi', 'pound', 'sterling', 'franc',
+        'peso', 'lira', 'ruble', 'rupee', 'exchange rate', 'devaluation',
+
+        # --- Commodities & Energy ---
+        'oil', 'gold', 'silver', 'commodity', 'commodities',
+        'natural gas', 'copper', 'iron ore', 'lithium', 'rare earth',
+        'wheat', 'corn', 'soybeans', 'agricultural',
+        'opec', 'energy', 'crude', 'brent', 'wti',
+
+        # --- Trade & Geopolitical Economy ---
+        'tariff', 'tariffs', 'trade war', 'sanctions',
+        'export controls', 'import', 'export', 'supply chain',
+        'g7', 'g20', 'imf', 'world bank', 'wto',
+        'globalization', 'reshoring', 'onshoring',
+
+        # --- Fiscal Policy & Government ---
         'debt', 'deficit', 'budget', 'fiscal',
+        'stimulus', 'bailout', 'subsidy', 'spending bill',
+        'debt ceiling', 'government shutdown', 'austerity',
+        'tax', 'taxes', 'taxation', 'tax cut', 'tax hike',
+
+        # --- Funds & Instruments ---
         'etf', 'index', 'indices', 'fund', 'funds',
-        'bull', 'bear', 'rally', 'crash', 'correction',
-        'volatility', 'vix',
+        'hedge fund', 'mutual fund', 'pension', 'endowment',
+        'asset management', 'portfolio',
+
+        # --- Volatility & Sentiment ---
+        'volatility', 'vix', 'fear index',
+
+        # --- Housing & Real Estate ---
+        'housing', 'mortgage', 'real estate', 'home prices',
+        'rent', 'reit', 'property',
+
+        # --- Sectors with Economic Impact ---
+        'semiconductor', 'chips', 'supply chain', 'pharma',
+        'pharmaceutical', 'biotech', 'defense', 'aerospace',
+        'infrastructure', 'utilities', 'insurance',
     ]
 
     # --- Crypto Keywords (exclude) ---
