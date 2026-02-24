@@ -26,7 +26,7 @@ import json
 import sqlite3
 import logging
 import gc
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import requests
 import schedule
 
@@ -158,7 +158,25 @@ class DatabaseManager:
                 volume REAL,
                 liquidity REAL,
                 end_date TEXT,
-                last_updated TEXT
+                last_updated TEXT,
+                first_seen TEXT,
+                volume24hr REAL,
+                volume1wk REAL,
+                volume1mo REAL,
+                one_month_price_change REAL,
+                last_trade_price REAL,
+                spread REAL,
+                clob_token_ids TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS market_price_grid (
+                market_id TEXT,
+                hour_offset INTEGER,
+                price REAL,
+                fetched_at TEXT,
+                PRIMARY KEY (market_id, hour_offset)
             )
         ''')
 
@@ -191,6 +209,14 @@ class DatabaseManager:
         # Migrate existing databases — add new columns if missing
         migrations = [
             ("markets", "resolution_criteria", "TEXT"),
+            ("markets", "first_seen", "TEXT"),
+            ("markets", "volume24hr", "REAL"),
+            ("markets", "volume1wk", "REAL"),
+            ("markets", "volume1mo", "REAL"),
+            ("markets", "one_month_price_change", "REAL"),
+            ("markets", "last_trade_price", "REAL"),
+            ("markets", "spread", "REAL"),
+            ("markets", "clob_token_ids", "TEXT"),
             ("market_snapshots", "bid", "REAL"),
             ("market_snapshots", "ask", "REAL"),
             ("market_snapshots", "open_interest", "REAL"),
@@ -207,31 +233,62 @@ class DatabaseManager:
         logger.info("Database tables verified")
 
     def upsert_market(self, market: dict):
-        """Insert or update a market."""
+        """Insert or update a market. first_seen is only set on the first insert."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # resolution_criteria: use dedicated field or fall back to description
+        def _f(val):
+            try:
+                return float(val) if val is not None else None
+            except (ValueError, TypeError):
+                return None
+
+        market_id = str(market.get('id', ''))
+        now_iso = datetime.now(timezone.utc).isoformat()
+
         resolution_criteria = (
             market.get('resolutionCriteria') or
             market.get('resolutionSource') or
             market.get('description') or ''
         )
 
+        # Normalise clobTokenIds to a JSON string
+        clob_raw = market.get('clobTokenIds', '[]')
+        clob_token_ids = clob_raw if isinstance(clob_raw, str) else json.dumps(clob_raw)
+
+        # INSERT IGNORE — only fires on first encounter; preserves first_seen
         cursor.execute('''
-            INSERT OR REPLACE INTO markets
-            (market_id, question, description, resolution_criteria, category, volume, liquidity, end_date, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO markets
+            (market_id, first_seen, last_updated)
+            VALUES (?, ?, ?)
+        ''', (market_id, now_iso, now_iso))
+
+        # UPDATE all mutable fields (never touches first_seen)
+        cursor.execute('''
+            UPDATE markets SET
+                question=?, description=?, resolution_criteria=?, category=?,
+                volume=?, liquidity=?, end_date=?,
+                volume24hr=?, volume1wk=?, volume1mo=?,
+                one_month_price_change=?, last_trade_price=?, spread=?,
+                clob_token_ids=?, last_updated=?
+            WHERE market_id=?
         ''', (
-            str(market.get('id', '')),
             market.get('question', ''),
             market.get('description', ''),
             resolution_criteria,
             market.get('category', 'uncategorized'),
-            float(market.get('volume', 0) or 0),
-            float(market.get('liquidity', 0) or 0),
+            _f(market.get('volume')) or 0,
+            _f(market.get('liquidity')) or 0,
             market.get('endDate'),
-            datetime.now(timezone.utc).isoformat()
+            _f(market.get('volume24hr')),
+            _f(market.get('volume1wk')),
+            _f(market.get('volume1mo')),
+            _f(market.get('oneMonthPriceChange')),
+            _f(market.get('lastTradePrice')),
+            _f(market.get('spread')),
+            clob_token_ids,
+            now_iso,
+            market_id,
         ))
 
         conn.commit()
@@ -298,6 +355,50 @@ class DatabaseManager:
 
         conn.commit()
         conn.close()
+
+    def get_first_seen(self, market_id: str):
+        """Return the first_seen datetime for a market, or None."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT first_seen FROM markets WHERE market_id=?", (market_id,))
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                return datetime.fromisoformat(row[0])
+        except Exception:
+            pass
+        return None
+
+    def store_price_grid_point(self, market_id: str, hour_offset: int, price: float):
+        """Upsert a single T±N price grid entry."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO market_price_grid
+                (market_id, hour_offset, price, fetched_at)
+                VALUES (?, ?, ?, ?)
+            ''', (market_id, hour_offset, price, datetime.now(timezone.utc).isoformat()))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning(f"Failed to store price grid point: {e}")
+
+    def get_price_grid(self, market_id: str) -> dict:
+        """Return {hour_offset: price} dict for a market (-24..+24)."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT hour_offset, price FROM market_price_grid WHERE market_id=?",
+                (market_id,)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return {row[0]: row[1] for row in rows}
+        except Exception:
+            return {}
 
     def cleanup_expired_markets(self):
         """Delete markets whose end_date has passed, plus their snapshots."""
@@ -395,6 +496,87 @@ class CloudRunner:
         else:
             logger.info("No R2 backup found — starting with fresh database")
 
+    # -------------------------------------------------------------------------
+    # CLOB helpers
+    # -------------------------------------------------------------------------
+
+    CLOB_BASE = "https://clob.polymarket.com"
+
+    def _backfill_clob_prices(self, market: dict):
+        """One-time CLOB backfill for a newly discovered market (T-24 to T-1).
+
+        Fetches the past 24 hours of hourly prices from the CLOB API and maps
+        each data point to its hour offset relative to first_seen.
+        """
+        try:
+            clob_raw = market.get('clobTokenIds', '[]')
+            clob_ids = json.loads(clob_raw) if isinstance(clob_raw, str) else clob_raw
+            if not clob_ids:
+                return
+
+            token_id = clob_ids[0]
+            market_id = str(market.get('id', ''))
+
+            first_seen_dt = self.db.get_first_seen(market_id)
+            if not first_seen_dt:
+                first_seen_dt = datetime.now(timezone.utc)
+
+            start_ts = int((first_seen_dt - timedelta(hours=24)).timestamp())
+            end_ts = int(first_seen_dt.timestamp())
+
+            resp = requests.get(
+                f"{self.CLOB_BASE}/prices-history",
+                params={"market": token_id, "interval": "1h",
+                        "startTs": start_ts, "endTs": end_ts, "fidelity": 60},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            history = resp.json().get("history", [])
+
+            stored = 0
+            for point in history:
+                ts = datetime.fromtimestamp(point["t"], tz=timezone.utc)
+                hours_before = (first_seen_dt - ts).total_seconds() / 3600
+                offset = -round(hours_before)  # negative: T-24 to T-1
+                if -24 <= offset <= -1:
+                    self.db.store_price_grid_point(market_id, offset, round(float(point["p"]), 4))
+                    stored += 1
+
+            logger.info(f"CLOB backfill: {stored} points stored for market {market_id}")
+
+        except Exception as e:
+            logger.warning(f"CLOB backfill failed for market {market.get('id')}: {e}")
+
+    def _update_tplus_price(self, market: dict):
+        """Store a T+ price entry if the market is within 24 h of first_seen.
+
+        Called on every hourly scan so the live price is recorded at each
+        offset T+1 through T+24.
+        """
+        try:
+            market_id = str(market.get('id', ''))
+            first_seen_dt = self.db.get_first_seen(market_id)
+            if not first_seen_dt:
+                return
+
+            now = datetime.now(timezone.utc)
+            hours_since = (now - first_seen_dt).total_seconds() / 3600
+            offset = round(hours_since)
+            if not (1 <= offset <= 24):
+                return
+
+            yes_price = 0.0
+            try:
+                prices_str = market.get('outcomePrices', '[0]')
+                yes_price = float(prices_str.strip('[]').split(',')[0])
+            except (ValueError, TypeError, IndexError):
+                pass
+
+            self.db.store_price_grid_point(market_id, offset, round(yes_price, 4))
+
+        except Exception as e:
+            logger.warning(f"T+ price update failed for market {market.get('id')}: {e}")
+
     def fetch_and_store_markets(self, discover_new: bool = True):
         """Fetch markets from API and store in database (memory-efficient).
 
@@ -405,11 +587,13 @@ class CloudRunner:
                              already registered in the DB. Faster and cheaper.
                              Run every hour.
         """
+        # Always load existing IDs: in full-discovery mode we use them to
+        # detect newly seen markets (for CLOB backfill); in snapshot-only mode
+        # we use them to skip markets we haven't registered yet.
+        existing_ids = self.db.get_all_market_ids()
         if discover_new:
             logger.info(f"Full discovery scan (max {MAX_PAGES} pages) ...")
-            existing_ids = None  # accept all finance markets
         else:
-            existing_ids = self.db.get_all_market_ids()
             logger.info(f"Snapshot-only scan for {len(existing_ids)} existing markets ...")
 
         total_fetched = 0
@@ -464,16 +648,25 @@ class CloudRunner:
 
                             if volume >= self.config.MIN_MARKET_VOLUME:
                                 market_id = str(market.get('id', ''))
+                                is_new = market_id not in existing_ids
 
                                 if discover_new:
                                     # Full scan: register market + snapshot
                                     self.db.upsert_market(market)
                                     self.db.add_snapshot(market)
                                     finance_count += 1
+                                    if is_new:
+                                        # One-time CLOB backfill for new markets
+                                        self._backfill_clob_prices(market)
                                 elif market_id in existing_ids:
                                     # Snapshot-only: skip unknown markets
                                     self.db.add_snapshot(market)
                                     finance_count += 1
+
+                                # T+ price grid update for markets within 24 h
+                                # of first_seen (both scan types)
+                                if not is_new:
+                                    self._update_tplus_price(market)
 
                     # Clear the markets list to free memory
                     del markets

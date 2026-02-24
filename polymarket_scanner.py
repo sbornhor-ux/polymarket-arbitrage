@@ -205,11 +205,24 @@ class MarketData:
     resolution_criteria: str
     category: str
     end_date: Optional[str]
+    first_seen: Optional[str] = None
 
     # Current state
-    current_price: float
-    current_volume: float
-    current_liquidity: float
+    current_price: float = 0.0
+    current_volume: float = 0.0
+    current_liquidity: float = 0.0
+
+    # Extended market metadata
+    volume24hr: float = 0.0
+    volume1wk: float = 0.0
+    volume1mo: float = 0.0
+    one_month_price_change: float = 0.0
+    last_trade_price: float = 0.0
+    spread: float = 0.0
+    clob_token_ids: str = ""
+
+    # T-24..T+24 price grid (keyed by hour offset, populated after load)
+    price_grid: dict = field(default_factory=dict)
 
     # Historical data (for analysis)
     price_history: List[Tuple[datetime, float]] = field(default_factory=list)
@@ -298,15 +311,29 @@ class MarketData:
                 daily_series["probability"].append(prob)
                 daily_series["volume"].append(round(vol, 2) if vol is not None else None)
 
+        # Build price grid as flat T-24..T+24 fields (T+0 excluded per spec)
+        price_grid_fields = {}
+        for offset in list(range(-24, 0)) + list(range(1, 25)):
+            tag = f"t_minus_{abs(offset):02d}" if offset < 0 else f"t_plus_{offset:02d}"
+            price_grid_fields[f"price_{tag}"] = self.price_grid.get(offset)
+
         return {
             "market_id": self.market_id,
             "question": self.question,
             "category": self.category,
             "end_date": self.end_date,
+            "first_seen": self.first_seen,
             "resolution_criteria": self.resolution_criteria[:1000] if self.resolution_criteria else "",
             "current_price": self.current_price,
             "current_volume": self.current_volume,
             "current_liquidity": self.current_liquidity,
+            "volume24hr": self.volume24hr,
+            "volume1wk": self.volume1wk,
+            "volume1mo": self.volume1mo,
+            "one_month_price_change": self.one_month_price_change,
+            "last_trade_price": round(self.last_trade_price, 4),
+            "spread": round(self.spread, 4),
+            "clob_token_ids": self.clob_token_ids,
             "time_series": {
                 "dates": dates,
                 "mid_price": mid_prices,
@@ -317,6 +344,7 @@ class MarketData:
                 "n_trades": _series(self.n_trades_history),
             },
             "daily_series": daily_series,
+            **price_grid_fields,
             "odds_swing_pct": round(self.odds_swing_pct, 4),
             "volume_surge_pct": round(self.volume_surge_pct, 4),
             "composite_score": round(self.composite_score, 4),
@@ -342,14 +370,28 @@ class MarketData:
 
     def to_csv_row(self) -> Dict:
         """Convert to flat dict for CSV output."""
+        price_grid_fields = {}
+        for offset in list(range(-24, 0)) + list(range(1, 25)):
+            tag = f"t_minus_{abs(offset):02d}" if offset < 0 else f"t_plus_{offset:02d}"
+            price_grid_fields[f"price_{tag}"] = self.price_grid.get(offset, "")
+
         return {
             "market_id": self.market_id,
             "question": self.question[:200] if self.question else "",
             "category": self.category,
             "end_date": self.end_date or "",
+            "first_seen": self.first_seen or "",
             "current_price": round(self.current_price, 4),
             "current_volume": round(self.current_volume, 2),
             "current_liquidity": round(self.current_liquidity, 2),
+            "volume24hr": round(self.volume24hr, 2),
+            "volume1wk": round(self.volume1wk, 2),
+            "volume1mo": round(self.volume1mo, 2),
+            "one_month_price_change": round(self.one_month_price_change, 4),
+            "last_trade_price": round(self.last_trade_price, 4),
+            "spread": round(self.spread, 4),
+            "clob_token_ids": self.clob_token_ids,
+            **price_grid_fields,
             "odds_swing_pct": round(self.odds_swing_pct * 100, 2),
             "volume_surge_pct": round(self.volume_surge_pct * 100, 2),
             "composite_score": round(self.composite_score, 4),
@@ -541,7 +583,9 @@ class SnapshotDB:
 
             cursor.execute("""
                 SELECT market_id, question, description, resolution_criteria,
-                       category, volume, liquidity, end_date
+                       category, volume, liquidity, end_date,
+                       first_seen, volume24hr, volume1wk, volume1mo,
+                       one_month_price_change, last_trade_price, spread, clob_token_ids
                 FROM markets
                 WHERE end_date IS NULL
                    OR datetime(end_date) > datetime('now')
@@ -558,6 +602,14 @@ class SnapshotDB:
                     'volume': row[5] or 0,
                     'liquidity': row[6] or 0,
                     'endDate': row[7],
+                    'first_seen': row[8],
+                    'volume24hr': row[9] or 0,
+                    'volume1wk': row[10] or 0,
+                    'volume1mo': row[11] or 0,
+                    'oneMonthPriceChange': row[12] or 0,
+                    'lastTradePrice': row[13] or 0,
+                    'spread': row[14] or 0,
+                    'clobTokenIds': row[15] or '[]',
                 }
                 markets.append(market)
 
@@ -567,6 +619,21 @@ class SnapshotDB:
         except Exception as e:
             print(f"DB error loading markets: {e}")
             return []
+
+    def get_price_grid(self, market_id: str) -> dict:
+        """Return {hour_offset: price} dict for a market (-24..+24)."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT hour_offset, price FROM market_price_grid WHERE market_id=?",
+                (market_id,)
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return {row[0]: row[1] for row in rows}
+        except Exception:
+            return {}
 
     def get_market_history_all(self, market_id: str) -> List[MarketSnapshot]:
         """Get ALL historical snapshots for a market (no time filter)."""
@@ -1221,9 +1288,18 @@ class PolymarketScanner:
                 resolution_criteria=resolution_criteria,
                 category=market.get('category', 'uncategorized'),
                 end_date=market.get('endDate'),
+                first_seen=market.get('first_seen'),
                 current_price=latest.price,
                 current_volume=latest.volume,
                 current_liquidity=latest.liquidity,
+                volume24hr=float(market.get('volume24hr', 0) or 0),
+                volume1wk=float(market.get('volume1wk', 0) or 0),
+                volume1mo=float(market.get('volume1mo', 0) or 0),
+                one_month_price_change=float(market.get('oneMonthPriceChange', 0) or 0),
+                last_trade_price=float(market.get('lastTradePrice', 0) or 0),
+                spread=float(market.get('spread', 0) or 0),
+                clob_token_ids=market.get('clobTokenIds', '[]'),
+                price_grid=self.db.get_price_grid(market_id),
                 price_history=[(s.timestamp, s.price) for s in snapshots],
                 volume_history=[(s.timestamp, s.volume) for s in snapshots],
                 liquidity_history=[(s.timestamp, s.liquidity) for s in snapshots],
