@@ -263,14 +263,17 @@ class DatabaseManager:
             VALUES (?, ?, ?)
         ''', (market_id, now_iso, now_iso))
 
-        # UPDATE all mutable fields (never touches first_seen)
+        # UPDATE all mutable fields.
+        # first_seen uses COALESCE so existing NULL rows (pre-migration) get
+        # stamped on next upsert while already-set values are preserved.
         cursor.execute('''
             UPDATE markets SET
                 question=?, description=?, resolution_criteria=?, category=?,
                 volume=?, liquidity=?, end_date=?,
                 volume24hr=?, volume1wk=?, volume1mo=?,
                 one_month_price_change=?, last_trade_price=?, spread=?,
-                clob_token_ids=?, last_updated=?
+                clob_token_ids=?, last_updated=?,
+                first_seen=COALESCE(first_seen, ?)
             WHERE market_id=?
         ''', (
             market.get('question', ''),
@@ -288,6 +291,7 @@ class DatabaseManager:
             _f(market.get('spread')),
             clob_token_ids,
             now_iso,
+            now_iso,  # COALESCE fallback for first_seen
             market_id,
         ))
 
@@ -655,8 +659,9 @@ class CloudRunner:
                                     self.db.upsert_market(market)
                                     self.db.add_snapshot(market)
                                     finance_count += 1
-                                    if is_new:
-                                        # One-time CLOB backfill for new markets
+                                    if is_new or not self.db.get_price_grid(market_id):
+                                        # Backfill: new market, or existing market
+                                        # with no price grid (e.g. pre-migration rows)
                                         self._backfill_clob_prices(market)
                                 elif market_id in existing_ids:
                                     # Snapshot-only: skip unknown markets
