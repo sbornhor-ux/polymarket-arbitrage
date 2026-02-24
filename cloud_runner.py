@@ -299,6 +299,36 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def cleanup_expired_markets(self):
+        """Delete markets whose end_date has passed, plus their snapshots."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Remove snapshots for expired markets first (FK-style cleanup)
+        cursor.execute("""
+            DELETE FROM market_snapshots
+            WHERE market_id IN (
+                SELECT market_id FROM markets
+                WHERE end_date IS NOT NULL
+                  AND datetime(end_date) <= datetime('now')
+            )
+        """)
+        snap_deleted = cursor.rowcount
+
+        # Remove the expired market rows themselves
+        cursor.execute("""
+            DELETE FROM markets
+            WHERE end_date IS NOT NULL
+              AND datetime(end_date) <= datetime('now')
+        """)
+        mkt_deleted = cursor.rowcount
+
+        conn.commit()
+        conn.close()
+
+        if mkt_deleted > 0:
+            logger.info(f"Removed {mkt_deleted} expired markets and {snap_deleted} associated snapshots")
+
     def get_all_market_ids(self) -> set:
         """Return the set of market IDs already registered in the markets table."""
         conn = sqlite3.connect(self.db_path)
@@ -412,7 +442,17 @@ class CloudRunner:
                     page += 1
 
                     # Filter and store immediately (don't keep in memory)
+                    now_iso = datetime.now(timezone.utc).isoformat()
                     for market in markets:
+                        # Skip markets that have already closed
+                        end_date = market.get('endDate') or market.get('end_date')
+                        if end_date:
+                            try:
+                                if end_date.replace('Z', '+00:00') < now_iso:
+                                    continue
+                            except (TypeError, AttributeError):
+                                pass
+
                         if self.client.is_finance_market(market):
                             try:
                                 volume = float(market.get('volume', 0) or 0)
@@ -563,7 +603,8 @@ class CloudRunner:
         if result:
             self.upload_to_r2(result)
 
-        # Step 4: Cleanup old data (keep 30 days)
+        # Step 4: Cleanup — remove expired markets and old snapshots
+        self.db.cleanup_expired_markets()
         self.db.cleanup_old_snapshots(days=30)
 
         # Final cleanup

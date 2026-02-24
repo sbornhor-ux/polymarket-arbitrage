@@ -481,6 +481,8 @@ class SnapshotDB:
                 SELECT market_id, question, description, resolution_criteria,
                        category, volume, liquidity, end_date
                 FROM markets
+                WHERE end_date IS NULL
+                   OR datetime(end_date) > datetime('now')
             """)
 
             markets = []
