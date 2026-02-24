@@ -299,6 +299,15 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def get_all_market_ids(self) -> set:
+        """Return the set of market IDs already registered in the markets table."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT market_id FROM markets")
+        ids = {row[0] for row in cursor.fetchall()}
+        conn.close()
+        return ids
+
     def cleanup_old_snapshots(self, days: int = 7):
         """Remove snapshots older than X days."""
         conn = sqlite3.connect(self.db_path)
@@ -356,9 +365,22 @@ class CloudRunner:
         else:
             logger.info("No R2 backup found — starting with fresh database")
 
-    def fetch_and_store_markets(self):
-        """Fetch markets from API and store in database (memory-efficient)."""
-        logger.info(f"Fetching markets from Polymarket API (max {MAX_PAGES} pages)...")
+    def fetch_and_store_markets(self, discover_new: bool = True):
+        """Fetch markets from API and store in database (memory-efficient).
+
+        discover_new=True  — Full sweep: upsert new market metadata AND add
+                             snapshots for all qualifying finance markets.
+                             Run every 3 hours.
+        discover_new=False — Snapshot-only: add snapshots only for markets
+                             already registered in the DB. Faster and cheaper.
+                             Run every hour.
+        """
+        if discover_new:
+            logger.info(f"Full discovery scan (max {MAX_PAGES} pages) ...")
+            existing_ids = None  # accept all finance markets
+        else:
+            existing_ids = self.db.get_all_market_ids()
+            logger.info(f"Snapshot-only scan for {len(existing_ids)} existing markets ...")
 
         total_fetched = 0
         finance_count = 0
@@ -392,16 +414,23 @@ class CloudRunner:
                     # Filter and store immediately (don't keep in memory)
                     for market in markets:
                         if self.client.is_finance_market(market):
-                            # Check volume threshold
                             try:
                                 volume = float(market.get('volume', 0) or 0)
                             except (ValueError, TypeError):
                                 volume = 0
 
                             if volume >= self.config.MIN_MARKET_VOLUME:
-                                self.db.upsert_market(market)
-                                self.db.add_snapshot(market)
-                                finance_count += 1
+                                market_id = str(market.get('id', ''))
+
+                                if discover_new:
+                                    # Full scan: register market + snapshot
+                                    self.db.upsert_market(market)
+                                    self.db.add_snapshot(market)
+                                    finance_count += 1
+                                elif market_id in existing_ids:
+                                    # Snapshot-only: skip unknown markets
+                                    self.db.add_snapshot(market)
+                                    finance_count += 1
 
                     # Clear the markets list to free memory
                     del markets
@@ -507,14 +536,19 @@ class CloudRunner:
 
         logger.info("Uploaded results to R2")
 
-    def run_once(self):
-        """Run a single scan cycle."""
+    def run_once(self, discover_new: bool = True):
+        """Run a single scan cycle.
+
+        discover_new=True  — full discovery + snapshot (runs every 3 h).
+        discover_new=False — snapshot-only for existing markets (runs every 1 h).
+        """
+        mode = "FULL DISCOVERY" if discover_new else "SNAPSHOT ONLY"
         logger.info("=" * 60)
-        logger.info(f"Starting scan cycle at {datetime.now(timezone.utc).isoformat()}")
+        logger.info(f"Starting {mode} scan at {datetime.now(timezone.utc).isoformat()}")
         logger.info("=" * 60)
 
         # Step 1: Fetch and store
-        market_count = self.fetch_and_store_markets()
+        market_count = self.fetch_and_store_markets(discover_new=discover_new)
         gc.collect()  # Free memory after fetch
 
         if market_count == 0:
@@ -529,22 +563,33 @@ class CloudRunner:
         if result:
             self.upload_to_r2(result)
 
-        # Step 4: Cleanup old data (keep 90 days for Trend Analyst statistical tests)
-        self.db.cleanup_old_snapshots(days=90)
+        # Step 4: Cleanup old data (keep 30 days)
+        self.db.cleanup_old_snapshots(days=30)
 
         # Final cleanup
         gc.collect()
         logger.info("Scan cycle complete")
 
     def run_scheduled(self):
-        """Run on a schedule (for Railway cron or continuous running)."""
-        logger.info(f"Starting scheduled runner (interval: {self.scan_interval} minutes)")
+        """Run on a schedule.
 
-        # Run immediately on start
-        self.run_once()
+        Snapshot-only scan: every SCAN_INTERVAL_MINUTES (default 60).
+        Full discovery scan: every 3 hours (picks up new markets).
+        Both run immediately on startup.
+        """
+        logger.info(
+            f"Starting scheduled runner — snapshots every {self.scan_interval} min, "
+            "full discovery every 3 h"
+        )
 
-        # Schedule future runs
-        schedule.every(self.scan_interval).minutes.do(self.run_once)
+        # Run a full discovery scan immediately on startup
+        self.run_once(discover_new=True)
+
+        # Hourly: snapshot-only (fast)
+        schedule.every(self.scan_interval).minutes.do(self.run_once, discover_new=False)
+
+        # Every 3 hours: full discovery (finds new markets)
+        schedule.every(3).hours.do(self.run_once, discover_new=True)
 
         # Keep running
         while True:
