@@ -303,12 +303,16 @@ class DatabaseManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Parse mid price from outcomePrices (YES outcome)
+        # Parse mid price from outcomePrices (YES outcome).
+        # The Gamma API returns a JSON string with quoted numbers:
+        #   '["0.0005", "0.9995"]'
+        # so we must parse as JSON rather than stripping brackets.
         yes_price = 0.0
         try:
-            prices_str = market.get('outcomePrices', '[0]')
-            yes_price = float(prices_str.strip('[]').split(',')[0])
-        except (ValueError, TypeError, IndexError):
+            prices_raw = market.get('outcomePrices', '[0]')
+            prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+            yes_price = float(prices[0])
+        except (ValueError, TypeError, IndexError, json.JSONDecodeError):
             pass
 
         # Bid / ask
@@ -571,9 +575,10 @@ class CloudRunner:
 
             yes_price = 0.0
             try:
-                prices_str = market.get('outcomePrices', '[0]')
-                yes_price = float(prices_str.strip('[]').split(',')[0])
-            except (ValueError, TypeError, IndexError):
+                prices_raw = market.get('outcomePrices', '[0]')
+                prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+                yes_price = float(prices[0])
+            except (ValueError, TypeError, IndexError, json.JSONDecodeError):
                 pass
 
             self.db.store_price_grid_point(market_id, offset, round(yes_price, 4))
