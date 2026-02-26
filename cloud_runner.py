@@ -777,6 +777,57 @@ class CloudRunner:
 
         logger.info("Uploaded results to R2")
 
+    def _flush_tplus_from_snapshots(self):
+        """Update T+ price grid for all markets within their 24h discovery window.
+
+        Reads the latest snapshot price directly from the DB rather than
+        relying on the market appearing in the current API scan loop.
+        This ensures hourly T+ entries are written even when a market doesn't
+        surface through the finance/volume filters during a snapshot-only scan.
+        """
+        try:
+            now = datetime.now(timezone.utc)
+            cutoff = (now - timedelta(hours=24)).isoformat()
+
+            conn = sqlite3.connect(self.db.db_path)
+            cursor = conn.cursor()
+
+            # Markets with first_seen in the past 24h + their latest snapshot price
+            cursor.execute('''
+                SELECT m.market_id, m.first_seen, s.yes_price
+                FROM markets m
+                JOIN market_snapshots s ON s.market_id = m.market_id
+                WHERE m.first_seen IS NOT NULL
+                  AND m.first_seen >= ?
+                  AND s.id = (
+                      SELECT MAX(id) FROM market_snapshots
+                      WHERE market_id = m.market_id
+                  )
+            ''', (cutoff,))
+
+            rows = cursor.fetchall()
+            conn.close()
+
+            updated = 0
+            for market_id, first_seen_str, yes_price in rows:
+                try:
+                    first_seen_dt = datetime.fromisoformat(first_seen_str)
+                    hours_since = (now - first_seen_dt).total_seconds() / 3600
+                    offset = round(hours_since)
+                    if 1 <= offset <= 24 and yes_price is not None:
+                        self.db.store_price_grid_point(
+                            market_id, offset, round(float(yes_price), 4)
+                        )
+                        updated += 1
+                except Exception as e:
+                    logger.warning(f"T+ flush failed for market {market_id}: {e}")
+
+            if updated:
+                logger.info(f"T+ flush: wrote {updated} price grid point(s)")
+
+        except Exception as e:
+            logger.error(f"T+ flush error: {e}")
+
     def run_once(self, discover_new: bool = True):
         """Run a single scan cycle.
 
@@ -796,15 +847,18 @@ class CloudRunner:
             logger.warning("No markets fetched, skipping analysis")
             return
 
-        # Step 2: Run analysis
+        # Step 2: Update T+ price grid from latest snapshots (every scan cycle)
+        self._flush_tplus_from_snapshots()
+
+        # Step 3: Run analysis
         result = self.run_analysis()
         gc.collect()  # Free memory after analysis
 
-        # Step 3: Upload to R2
+        # Step 4: Upload to R2
         if result:
             self.upload_to_r2(result)
 
-        # Step 4: Cleanup — remove expired markets and old snapshots
+        # Step 5: Cleanup — remove expired markets and old snapshots
         self.db.cleanup_expired_markets()
         self.db.cleanup_old_snapshots(days=30)
 
