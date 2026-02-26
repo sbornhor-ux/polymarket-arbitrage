@@ -909,6 +909,37 @@ class CloudRunner:
                     # 3. CLOB price backfill anchored to first_seen (oldest snapshot)
                     self._backfill_clob_prices({'id': market_id, 'clobTokenIds': json.dumps(clob_ids)})
 
+                    # 4. Retrospective T+ backfill from existing snapshots.
+                    #    The T+ flush normally only covers first_seen within the last 24h,
+                    #    but zombie first_seen values are older, so we scan snapshots directly.
+                    try:
+                        first_seen_dt = datetime.fromisoformat(oldest_snap)
+                        tplus_end = first_seen_dt + timedelta(hours=24)
+                        conn = sqlite3.connect(self.db.db_path)
+                        snap_cur = conn.cursor()
+                        snap_cur.execute("""
+                            SELECT timestamp, yes_price FROM market_snapshots
+                            WHERE market_id=? AND timestamp >= ? AND timestamp <= ?
+                              AND yes_price IS NOT NULL
+                            ORDER BY timestamp ASC
+                        """, (market_id, oldest_snap, tplus_end.isoformat()))
+                        snaps = snap_cur.fetchall()
+                        conn.close()
+                        tplus_stored = 0
+                        for snap_ts, yes_price in snaps:
+                            snap_dt = datetime.fromisoformat(snap_ts)
+                            hours_since = (snap_dt - first_seen_dt).total_seconds() / 3600
+                            offset = round(hours_since)
+                            if 1 <= offset <= 24:
+                                self.db.store_price_grid_point(
+                                    market_id, offset, round(float(yes_price), 4)
+                                )
+                                tplus_stored += 1
+                        if tplus_stored:
+                            logger.info(f"Zombie {market_id}: retrospective T+ stored {tplus_stored} point(s)")
+                    except Exception as e:
+                        logger.warning(f"Retrospective T+ failed for zombie {market_id}: {e}")
+
                 except Exception as e:
                     logger.warning(f"Zombie fix failed for market {market_id}: {e}")
 
