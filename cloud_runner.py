@@ -833,6 +833,93 @@ class CloudRunner:
         except Exception as e:
             logger.error(f"T+ flush error: {e}")
 
+    def _backfill_tplus_from_clob(self):
+        """Re-fetch T+ prices from CLOB for all markets whose T+ grid has only 0.0 values.
+
+        The original add_snapshot() stored yes_price=0.0 due to a JSON parsing bug.
+        This method detects stale 0.0-only T+ grids and replaces them with real CLOB history.
+        Safe to call every run — skips markets whose T+ grid already has non-zero prices.
+        """
+        try:
+            conn = sqlite3.connect(self.db.db_path)
+            cursor = conn.cursor()
+
+            # Find markets where every T+ entry is 0.0 (stale) but T- exists (properly set up)
+            cursor.execute("""
+                SELECT m.market_id, m.clob_token_ids, m.first_seen
+                FROM markets m
+                WHERE m.first_seen IS NOT NULL
+                  AND m.clob_token_ids IS NOT NULL
+                  AND m.clob_token_ids != '[]'
+                  AND EXISTS (
+                      SELECT 1 FROM market_price_grid g
+                      WHERE g.market_id = m.market_id AND g.hour_offset > 0
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM market_price_grid g
+                      WHERE g.market_id = m.market_id AND g.hour_offset > 0 AND g.price > 0
+                  )
+            """)
+            stale = cursor.fetchall()
+            conn.close()
+
+            if not stale:
+                return
+
+            logger.info(f"T+ CLOB re-fetch: {len(stale)} market(s) with stale 0.0 T+ prices")
+
+            for market_id, clob_raw, first_seen_str in stale:
+                try:
+                    clob_ids = json.loads(clob_raw) if isinstance(clob_raw, str) else clob_raw
+                    if not clob_ids:
+                        continue
+                    token_id = clob_ids[0]
+
+                    first_seen_dt = datetime.fromisoformat(first_seen_str)
+                    if first_seen_dt.tzinfo is None:
+                        first_seen_dt = first_seen_dt.replace(tzinfo=timezone.utc)
+
+                    start_ts = int(first_seen_dt.timestamp())
+                    end_ts   = int((first_seen_dt + timedelta(hours=25)).timestamp())
+
+                    resp = requests.get(
+                        f"{self.CLOB_BASE}/prices-history",
+                        params={"market": token_id, "interval": "1h",
+                                "startTs": start_ts, "endTs": end_ts, "fidelity": 60},
+                        timeout=15,
+                    )
+                    resp.raise_for_status()
+                    history = resp.json().get("history", [])
+
+                    # Delete stale 0.0 T+ entries before replacing
+                    conn = sqlite3.connect(self.db.db_path)
+                    conn.execute(
+                        "DELETE FROM market_price_grid WHERE market_id=? AND hour_offset > 0",
+                        (market_id,)
+                    )
+                    stored = 0
+                    for point in history:
+                        pt_dt = datetime.fromtimestamp(point["t"], tz=timezone.utc)
+                        hours_after = (pt_dt - first_seen_dt).total_seconds() / 3600
+                        offset = round(hours_after)
+                        if 1 <= offset <= 24:
+                            conn.execute(
+                                "INSERT OR REPLACE INTO market_price_grid "
+                                "(market_id, hour_offset, price, fetched_at) VALUES (?,?,?,?)",
+                                (market_id, offset, round(float(point["p"]), 4),
+                                 datetime.now(timezone.utc).isoformat())
+                            )
+                            stored += 1
+                    conn.commit()
+                    conn.close()
+                    logger.info(f"T+ re-fetch: {stored} pts for market {market_id}")
+
+                except Exception as e:
+                    logger.warning(f"T+ CLOB re-fetch failed for {market_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"T+ CLOB re-fetch error: {e}")
+
     def _backfill_zombie_markets(self):
         """One-time backfill for markets that have snapshots but no first_seen or price grid.
 
@@ -964,8 +1051,10 @@ class CloudRunner:
         logger.info(f"Starting {mode} scan at {datetime.now(timezone.utc).isoformat()}")
         logger.info("=" * 60)
 
-        # Step 0: Fix any pre-migration markets missing first_seen / price grid
+        # Step 0a: Fix pre-migration markets missing first_seen / price grid
         self._backfill_zombie_markets()
+        # Step 0b: Re-fetch T+ prices from CLOB where yes_price was stored as 0.0
+        self._backfill_tplus_from_clob()
 
         # Step 1: Fetch and store
         market_count = self.fetch_and_store_markets(discover_new=discover_new)
