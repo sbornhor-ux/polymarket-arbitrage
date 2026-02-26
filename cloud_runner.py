@@ -828,6 +828,95 @@ class CloudRunner:
         except Exception as e:
             logger.error(f"T+ flush error: {e}")
 
+    def _backfill_zombie_markets(self):
+        """One-time backfill for markets that have snapshots but no first_seen or price grid.
+
+        Handles pre-migration rows that were stored before the new pipeline.
+        For each zombie market:
+          1. Sets first_seen from its oldest snapshot timestamp.
+          2. Resolves clobTokenIds via Gamma API if not stored.
+          3. Calls CLOB API to populate T-minus price grid (T-24..T-1).
+        Safe to call on every run — quickly no-ops once all markets are fixed.
+        """
+        try:
+            conn = sqlite3.connect(self.db.db_path)
+            cursor = conn.cursor()
+
+            # Markets that have at least one snapshot but still have first_seen=NULL
+            cursor.execute("""
+                SELECT m.market_id, m.clob_token_ids, MIN(s.timestamp) AS oldest_snap
+                FROM markets m
+                JOIN market_snapshots s ON s.market_id = m.market_id
+                WHERE m.first_seen IS NULL
+                GROUP BY m.market_id
+            """)
+            zombies = cursor.fetchall()
+            conn.close()
+
+            if not zombies:
+                return
+
+            logger.info(f"Zombie backfill: fixing {len(zombies)} market(s) with missing first_seen")
+
+            for market_id, clob_raw, oldest_snap in zombies:
+                try:
+                    # 1. Stamp first_seen with the oldest snapshot we have
+                    conn = sqlite3.connect(self.db.db_path)
+                    conn.execute(
+                        "UPDATE markets SET first_seen=? WHERE market_id=? AND first_seen IS NULL",
+                        (oldest_snap, market_id),
+                    )
+                    conn.commit()
+                    conn.close()
+                    logger.info(f"Zombie {market_id}: set first_seen={oldest_snap[:19]}")
+
+                    # 2. Resolve clob_token_ids — stored value or Gamma API lookup
+                    clob_ids = []
+                    if clob_raw and clob_raw != '[]':
+                        try:
+                            clob_ids = json.loads(clob_raw)
+                        except Exception:
+                            pass
+
+                    if not clob_ids:
+                        try:
+                            resp = requests.get(
+                                self.config.POLYMARKET_API_URL,
+                                params={"id": market_id, "limit": 1},
+                                timeout=15,
+                            )
+                            resp.raise_for_status()
+                            data = resp.json()
+                            if data:
+                                raw = data[0].get('clobTokenIds', '[]')
+                                clob_ids = json.loads(raw) if isinstance(raw, str) else raw
+                                if clob_ids:
+                                    conn = sqlite3.connect(self.db.db_path)
+                                    conn.execute(
+                                        "UPDATE markets SET clob_token_ids=? WHERE market_id=?",
+                                        (json.dumps(clob_ids), market_id),
+                                    )
+                                    conn.commit()
+                                    conn.close()
+                                    logger.info(f"Zombie {market_id}: fetched clob_token_ids from Gamma API")
+                        except Exception as e:
+                            logger.warning(f"Gamma API lookup failed for zombie {market_id}: {e}")
+
+                    if not clob_ids:
+                        logger.warning(f"Zombie {market_id}: no CLOB token IDs found, skipping price backfill")
+                        continue
+
+                    # 3. CLOB price backfill anchored to first_seen (oldest snapshot)
+                    self._backfill_clob_prices({'id': market_id, 'clobTokenIds': json.dumps(clob_ids)})
+
+                except Exception as e:
+                    logger.warning(f"Zombie fix failed for market {market_id}: {e}")
+
+            logger.info("Zombie backfill complete")
+
+        except Exception as e:
+            logger.error(f"Zombie backfill error: {e}")
+
     def run_once(self, discover_new: bool = True):
         """Run a single scan cycle.
 
@@ -838,6 +927,9 @@ class CloudRunner:
         logger.info("=" * 60)
         logger.info(f"Starting {mode} scan at {datetime.now(timezone.utc).isoformat()}")
         logger.info("=" * 60)
+
+        # Step 0: Fix any pre-migration markets missing first_seen / price grid
+        self._backfill_zombie_markets()
 
         # Step 1: Fetch and store
         market_count = self.fetch_and_store_markets(discover_new=discover_new)
