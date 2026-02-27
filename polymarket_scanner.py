@@ -46,7 +46,7 @@ class ScannerConfig:
     FINANCE_KEYWORDS = [
         # --- Equities & Markets ---
         'stock', 'stocks', 'share', 'shares', 'equity', 'equities',
-        'market', 'markets', 'trading', 'trader', 'trade',
+        'trading', 'trader', 'trade',
         'price', 'prices', 'valuation', 'market cap',
         's&p', 'sp500', 'dow', 'nasdaq', 'russell', 'ftse', 'dax', 'nikkei',
         'bull', 'bear', 'rally', 'crash', 'correction', 'selloff', 'rebound',
@@ -135,6 +135,32 @@ class ScannerConfig:
         'memecoin', 'meme coin', 'nft', 'defi', 'blockchain',
         'coinbase', 'binance', 'fdv', 'airdrop', 'stablecoin',
         'usdt', 'usdc', 'tether', 'altcoin', 'web3',
+    ]
+
+    # --- Sports Keywords (exclude) ---
+    SPORTS_EXCLUDE_KEYWORDS = [
+        # Major US sports leagues
+        'nba', 'nfl', 'mlb', 'nhl', 'mls', 'ncaa', 'nascar', 'pga tour',
+        # International sports leagues / governing bodies
+        'fifa', 'uefa', 'icc', 'premier league', 'la liga', 'bundesliga',
+        'serie a', 'ligue 1', 'champions league', 'europa league',
+        'ipl', 'big bash', 'super rugby', 'six nations',
+        # Sport names
+        'basketball', 'baseball', 'soccer', 'ice hockey', 'cricket',
+        'rugby', 'boxing', 'mma', 'ufc', 'wrestling', 'gymnastics',
+        'formula 1', 'formula one', ' f1 ', 'grand prix',
+        # Tournament / event names
+        'super bowl', 'world series', 'nba finals', 'stanley cup',
+        'world cup', 'olympics', 'olympic games',
+        'wimbledon', 'us open tennis', 'french open', 'australian open',
+        'masters tournament', 'ryder cup', 'solheim cup',
+        # Sports-only jargon
+        'touchdown', 'home run', 'slam dunk', 'hat trick', 'hat-trick',
+        'quarterback', 'pitcher', 'goalkeeper', 'wicket', 'innings',
+        'playoff series', 'championship series', 'division title',
+        'mvp award', 'heisman', 'ballon d\'or',
+        # Esports
+        'esports', 'e-sports', 'valorant', 'league of legends', 'dota',
     ]
 
     # --- Deep Analysis Thresholds ---
@@ -486,8 +512,74 @@ class PolymarketClient:
                 if kw in text:
                     return False
 
-        # Second check: must match finance keywords
+        # Second check: exclude sports markets
+        for kw in self.config.SPORTS_EXCLUDE_KEYWORDS:
+            if len(kw) <= 3:
+                if re.search(r'\b' + re.escape(kw) + r'\b', text):
+                    return False
+            else:
+                if kw in text:
+                    return False
+
+        # Third check: must match finance keywords
         return any(kw in text for kw in self.config.FINANCE_KEYWORDS)
+
+    def classify_market(self, market: Dict) -> str:
+        """Classify a finance market into a thematic category."""
+        text = (
+            market.get('question', '') + ' ' +
+            (market.get('description') or '')
+        ).lower()
+
+        # Fed / Monetary Policy — check first (most specific)
+        if any(kw in text for kw in [
+            'federal reserve', 'fomc', 'rate hike', 'rate cut', 'basis points',
+            'quantitative easing', 'quantitative tightening', 'tapering',
+            'monetary policy', 'ecb ', 'bank of england', 'bank of japan',
+            'fed funds', 'fed rate', 'interest rate decision',
+        ]) or re.search(r'\bfed\b', text):
+            return 'Fed / Monetary Policy'
+
+        # US Politics
+        if any(kw in text for kw in [
+            'president', 'congress', 'senate', 'house of representatives',
+            'election', 'trump', 'biden', 'harris', 'democrat', 'republican',
+            'white house', 'supreme court', 'executive order', 'impeach',
+            'filibuster', 'electoral college', 'doge ', 'elon musk',
+        ]):
+            return 'US Politics'
+
+        # Geopolitics
+        if any(kw in text for kw in [
+            'war', 'military', 'invasion', 'nato', 'ukraine', 'russia',
+            'china', 'iran', 'north korea', 'israel', 'gaza', 'nuclear',
+            'ceasefire', 'peace deal', 'missile', 'troops', 'conflict',
+            'sanctions', 'export controls', 'tariff', 'tariffs', 'trade war',
+            'g7', 'g20',
+        ]):
+            return 'Geopolitics'
+
+        # Economics / Macro
+        if any(kw in text for kw in [
+            'gdp', 'recession', 'inflation', 'cpi', 'ppi', 'pce',
+            'unemployment', 'jobs report', 'payroll', 'nfp', 'non-farm',
+            'consumer confidence', 'retail sales', 'pmi', 'ism',
+            'housing starts', 'building permits', 'trade deficit',
+            'economic growth', 'stagflation', 'deflation',
+        ]):
+            return 'Economics / Macro'
+
+        # Financial Markets
+        if any(kw in text for kw in [
+            's&p', 'sp500', 'nasdaq', 'dow jones', 'ftse', 'nikkei', 'dax',
+            'stock', 'equity', 'bond yield', 'treasury', 'yield curve',
+            'etf', 'ipo', 'earnings', 'merger', 'acquisition',
+            'oil', 'gold', 'silver', 'opec', 'brent', 'wti', 'crude',
+            'forex', 'dollar', 'euro', 'currency', 'exchange rate',
+        ]):
+            return 'Financial Markets'
+
+        return 'Social / Other'
 
     def filter_finance_markets(self, markets: List[Dict]) -> List[Dict]:
         """Filter to only finance-related, non-crypto markets."""

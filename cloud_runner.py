@@ -661,6 +661,7 @@ class CloudRunner:
 
                                 if discover_new:
                                     # Full scan: register market + snapshot
+                                    market['category'] = self.client.classify_market(market)
                                     self.db.upsert_market(market)
                                     self.db.add_snapshot(market)
                                     finance_count += 1
