@@ -102,6 +102,18 @@ class ScannerConfig:
         'g7', 'g20', 'imf', 'world bank', 'wto',
         'globalization', 'reshoring', 'onshoring',
 
+        # --- Geopolitics & Conflict ---
+        'war', 'military', 'invasion', 'nuclear', 'ceasefire',
+        'missile', 'troops', 'conflict', 'nato', 'strike',
+        'peace deal', 'peace talks', 'coup', 'occupied',
+
+        # --- US & Global Politics ---
+        'election', 'presidential', 'president', 'senate', 'congress',
+        'nomination', 'nominee', 'democratic', 'republican', 'democrat',
+        'white house', 'supreme court', 'cabinet', 'administration',
+        'executive order', 'legislation', 'policy', 'government',
+        'prime minister', 'chancellor', 'head of state', 'leader of',
+
         # --- Fiscal Policy & Government ---
         'debt', 'deficit', 'budget', 'fiscal',
         'stimulus', 'bailout', 'subsidy', 'spending bill',
@@ -526,6 +538,7 @@ class PolymarketClient:
 
     def classify_market(self, market: Dict) -> str:
         """Classify a finance market into a thematic category."""
+        import re
         text = (
             market.get('question', '') + ' ' +
             (market.get('description') or '')
@@ -555,7 +568,8 @@ class PolymarketClient:
             'china', 'iran', 'north korea', 'israel', 'gaza', 'nuclear',
             'ceasefire', 'peace deal', 'missile', 'troops', 'conflict',
             'sanctions', 'export controls', 'tariff', 'tariffs', 'trade war',
-            'g7', 'g20',
+            'g7', 'g20', 'venezuela', 'leader of', 'head of state',
+            'regime', 'coup', 'occupied', 'diplomat', 'foreign policy',
         ]):
             return 'Geopolitics'
 
