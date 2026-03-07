@@ -542,14 +542,15 @@ def main():
     parser.add_argument('--trend',  help='Path to trend_analysis JSON')
     parser.add_argument('--csv',    help='Path to polymarket CSV')
     parser.add_argument('--report', help='Path to investment report MD')
-    parser.add_argument('--out',    help='Output HTML path (default: output/dashboard.html)')
+    parser.add_argument('--out',    help='Output HTML path (default: docs/index.html)')
     parser.add_argument('--open',   action='store_true', help='Open in browser after generating')
     args = parser.parse_args()
 
     trend_path  = Path(args.trend)  if args.trend  else find_latest('trend_analysis_*.json')
     csv_path    = Path(args.csv)    if args.csv    else find_latest('polymarket_prod_*.csv')
     report_path = Path(args.report) if args.report else find_latest('investment_report_*.md')
-    out_path    = Path(args.out)    if args.out    else OUTPUT_DIR / 'dashboard.html'
+    out_path    = Path(args.out)    if args.out    else ROOT / 'docs' / 'index.html'
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not trend_path:
         print('ERROR: No trend_analysis_*.json found in output/. Run the pipeline first.')
