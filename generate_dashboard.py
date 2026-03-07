@@ -13,8 +13,10 @@ import json
 import csv
 import argparse
 import webbrowser
+import urllib.request
+import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 
 ROOT       = Path(__file__).parent
 OUTPUT_DIR = ROOT / 'output'
@@ -108,7 +110,36 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                         break
                 break
 
+    # Filter out markets that have already closed
+    today = date.today().isoformat()
+    market_list = [m for m in market_list if not m['end_date'] or m['end_date'][:10] >= today]
+
     return market_list, report_md, report_mid, trend.get('analysis_timestamp', '')
+
+
+def fetch_slugs_from_gamma(market_list: list) -> None:
+    """Fetch missing slugs from Polymarket Gamma API (in-place update)."""
+    missing = [m for m in market_list if not m.get('slug')]
+    if not missing:
+        return
+    print(f'  Fetching Polymarket slugs for {len(missing)} markets...')
+    fetched = 0
+    for m in missing:
+        try:
+            url = f'https://gamma-api.polymarket.com/markets/{m["id"]}'
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                data = json.loads(r.read())
+                if isinstance(data, list):
+                    data = data[0] if data else {}
+                slug = data.get('slug', '') or data.get('groupSlug', '')
+                if slug:
+                    m['slug'] = slug
+                    fetched += 1
+        except Exception:
+            pass
+        time.sleep(0.05)
+    print(f'  Got slugs for {fetched}/{len(missing)} markets')
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +307,23 @@ body {
 .report-body a  { color: #58a6ff; }
 .report-body strong { color: #e6edf3; }
 
+/* Arbitrage signal banner */
+.signal-banner {
+  border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.signal-banner.sig-poly  { background: #0c2d4d; border: 1px solid #388bfd40; }
+.signal-banner.sig-fin   { background: #2b1b56; border: 1px solid #8957e540; }
+.signal-banner.sig-both  { background: #0b2e2a; border: 1px solid #39d35340; }
+.signal-banner.sig-none  { background: #1c2128; border: 1px solid #30363d; }
+.signal-icon  { font-size: 22px; flex-shrink: 0; }
+.signal-label { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
+.signal-desc  { font-size: 12px; color: #8b949e; line-height: 1.4; }
+.signal-banner.sig-poly .signal-label  { color: #58a6ff; }
+.signal-banner.sig-fin .signal-label   { color: #bc8cff; }
+.signal-banner.sig-both .signal-label  { color: #3fb950; }
+.signal-banner.sig-none .signal-label  { color: #7d8590; }
+
 /* Empty state */
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -348,6 +396,46 @@ function discLabel(d) {
   return { cls:"disc-none", label: d };
 }
 
+function signalBanner(discovery, ticker) {
+  const t = esc(ticker || "financial markets");
+  if (discovery === "polymarket_leads") return `
+    <div class="signal-banner sig-poly">
+      <div class="signal-icon">&#x1F4C8;</div>
+      <div>
+        <div class="signal-label">Polymarket leads — potential opportunity</div>
+        <div class="signal-desc">Polymarket priced this information <strong>before</strong> ${t} reacted.
+        If the financial market hasn't fully caught up, there may be a tradeable edge.</div>
+      </div>
+    </div>`;
+  if (discovery === "finance_leads") return `
+    <div class="signal-banner sig-fin">
+      <div class="signal-icon">&#x1F3DB;</div>
+      <div>
+        <div class="signal-label">Financial markets lead — information already priced in</div>
+        <div class="signal-desc">${t} moved <strong>before</strong> Polymarket. Traditional markets
+        priced this event first — Polymarket odds may lag reality.</div>
+      </div>
+    </div>`;
+  if (discovery === "contemporaneous") return `
+    <div class="signal-banner sig-both">
+      <div class="signal-icon">&#x21C4;</div>
+      <div>
+        <div class="signal-label">Simultaneous movement — markets in sync</div>
+        <div class="signal-desc">Polymarket and ${t} moved together at the same time.
+        Strong co-movement but no clear information advantage on either side.</div>
+      </div>
+    </div>`;
+  return `
+    <div class="signal-banner sig-none">
+      <div class="signal-icon">&#x2014;</div>
+      <div>
+        <div class="signal-label">No clear price discovery signal</div>
+        <div class="signal-desc">Insufficient data or no significant relationship detected
+        between this market and ${t}.</div>
+      </div>
+    </div>`;
+}
+
 function yahooUrl(ticker) {
   return "https://finance.yahoo.com/quote/" + ticker.replace("^", "%5E");
 }
@@ -406,6 +494,7 @@ function renderDetail(m) {
       </div>
     </div>
     <div class="detail-body">
+      __SIGNAL_BANNER__
   `;
 
   /* Best pair summary */
@@ -488,6 +577,11 @@ function renderDetail(m) {
     `;
   }
 
+  // Arbitrage signal banner (uses best pair's discovery)
+  const bestDiscovery = best ? best.discovery : "";
+  const bestTickerName = best ? best.ticker_name : "";
+  html = html.replace("__SIGNAL_BANNER__", signalBanner(bestDiscovery, bestTickerName));
+
   html += "</div>"; // detail-body
   document.getElementById("detail").innerHTML = html;
 
@@ -569,6 +663,7 @@ def main():
         q = next((m["question"] for m in market_list if m["id"] == report_mid), "")
         print(f'  Report attached to: {q[:70]}')
 
+    fetch_slugs_from_gamma(market_list)
     html = build_html(market_list, report_md, report_mid, ts)
     out_path.write_text(html, encoding='utf-8')
     print(f'\n  Dashboard saved -> {out_path}')
