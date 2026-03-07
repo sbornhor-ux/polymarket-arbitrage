@@ -21,7 +21,7 @@ logger = logging.getLogger("trend_analyst.llm")
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 
-_SUMMARY_MODEL  = "gpt-4o"
+_SUMMARY_MODEL  = "gpt-4o-mini"
 _PLANNER_MODEL  = "gpt-4o-mini"
 
 

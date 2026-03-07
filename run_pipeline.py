@@ -278,7 +278,7 @@ def run_trend_analyst(csv_path: Path, pipeline_path: Path) -> Path:
     result = _run(
         polymarket_csv=str(csv_path),
         financial_source=str(pipeline_path),
-        output=str(TREND_PATH),
+        output_path=str(TREND_PATH),
         upload_r2=False,
         use_llm=True,
     )
