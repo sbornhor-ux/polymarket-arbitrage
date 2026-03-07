@@ -217,6 +217,7 @@ class DatabaseManager:
             ("markets", "last_trade_price", "REAL"),
             ("markets", "spread", "REAL"),
             ("markets", "clob_token_ids", "TEXT"),
+            ("markets", "slug", "TEXT"),
             ("market_snapshots", "bid", "REAL"),
             ("market_snapshots", "ask", "REAL"),
             ("market_snapshots", "open_interest", "REAL"),
@@ -272,7 +273,7 @@ class DatabaseManager:
                 volume=?, liquidity=?, end_date=?,
                 volume24hr=?, volume1wk=?, volume1mo=?,
                 one_month_price_change=?, last_trade_price=?, spread=?,
-                clob_token_ids=?, last_updated=?,
+                clob_token_ids=?, slug=?, last_updated=?,
                 first_seen=COALESCE(first_seen, ?)
             WHERE market_id=?
         ''', (
@@ -290,6 +291,7 @@ class DatabaseManager:
             _f(market.get('lastTradePrice')),
             _f(market.get('spread')),
             clob_token_ids,
+            market.get('slug', ''),
             now_iso,
             now_iso,  # COALESCE fallback for first_seen
             market_id,

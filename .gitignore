@@ -15,6 +15,33 @@ ENV/
 prediction_markets.db
 *.log
 
+# Secrets
+secrets.txt
+.env
+.env.local
+
+# Pipeline outputs (generated locally, uploaded to R2)
+output/
+pipeline_*.json
+trend_analysis_*.json
+investment_report_*.md
+polymarket_prod_*.csv
+polymarket_live_*.csv
+polymarket_latest*.csv
+prod_*.db
+prod_*.csv
+
+# Extracted/temp folders
+*_extract/
+trend_analyst_extracted/
+project_extract/
+finance_agent_extract/
+__MACOSX/
+
+# Large data files
+*.xlsx
+*.zip
+
 # Output files (generated, uploaded to R2)
 scan_results_*.json
 scan_results_*.csv
@@ -23,9 +50,7 @@ latest_scan.csv
 test_report_*.html
 market_comparison_report.html
 
-# Environment
-.env
-.env.local
+# Environment (covered above)
 
 # OS
 .DS_Store

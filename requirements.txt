@@ -1,4 +1,22 @@
+# Polymarket scanner + cloud runner
 requests>=2.31.0
 pytz>=2024.1
 schedule>=1.2.0
 boto3>=1.34.0
+
+# Data processing
+pandas>=2.2
+numpy>=1.26
+scipy>=1.13
+statsmodels
+
+# Finance & polymarket agents (pydantic models, CLOB + Polygon API)
+pydantic>=2.0
+httpx>=0.27
+polygon-api-client>=1.13
+
+# Trend analyst + synthesizer (LLM calls)
+openai>=1.0
+langchain
+langchain-openai
+langchain-core
