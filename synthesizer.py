@@ -73,6 +73,28 @@ Guidelines for writing:
 - Sources cited at end"""
 
 
+# Template for per-market signal summaries
+market_summaries_instructions = """You are a senior investment analyst writing a "Market Signal Summaries" \
+section for an investment report.
+
+For each Polymarket prediction market listed below, write a focused 2–3 sentence summary that:
+1. States what the market is asking and its approximate current probability.
+2. Explains what caused it to be flagged as a financial signal — i.e. what price movement, \
+swing, or statistical pattern was detected.
+3. Names the most relevant financial instrument, its alignment (moves "with" or "against" YES), \
+and the key statistical finding (correlation, lead-lag signal, or event study result).
+
+Rules:
+- Use a concise, analytical tone — no marketing language.
+- Start each entry with ### [Market Question] as a Markdown subheading.
+- If confidence in the instrument selection is low (< 40), note that the connection is speculative.
+- Do not add a preamble — start directly with the first ### heading.
+
+Markets:
+{markets_context}
+"""
+
+
 # Template for Introduction and Conclusion sections
 final_section_writer_instructions = """You are an expert investment analyst crafting a section that synthesizes information from the rest of the report.
 
@@ -341,11 +363,95 @@ def generate_introduction(llm, topic):
     )
 
 
+def generate_market_summaries(llm, pairs: list) -> str:
+    """
+    Generate Section: Per-Market Signal Summaries.
+
+    Groups pairs by Polymarket market, formats the top instruments and key
+    findings for each market, then calls the LLM once to produce a brief
+    analyst summary per market.
+
+    Only markets with at least one pair where overall_similarity_score >= 0.05
+    are included (filters out markets with no meaningful signal).
+
+    Args:
+        llm: LangChain LLM instance
+        pairs: List of pair analysis dicts from trend_analysis JSON
+
+    Returns:
+        str: Markdown section with one ### subsection per market
+    """
+    from collections import defaultdict
+
+    # Group pairs by market, keep top 3 by overall_similarity_score
+    market_groups: dict[str, dict] = {}
+    for p in pairs:
+        mid = p.get("polymarket_id", "")
+        q   = p.get("polymarket_question", "")
+        if not mid or not q:
+            continue
+        if mid not in market_groups:
+            market_groups[mid] = {"question": q, "pairs": []}
+        market_groups[mid]["pairs"].append(p)
+
+    # Sort each group by score descending, keep top 3 instruments per market
+    for g in market_groups.values():
+        g["pairs"].sort(key=lambda x: x.get("overall_similarity_score", 0), reverse=True)
+        g["pairs"] = g["pairs"][:3]
+
+    # Filter to markets that have at least one meaningful signal
+    meaningful = [
+        g for g in market_groups.values()
+        if any(p.get("overall_similarity_score", 0) >= 0.05 for p in g["pairs"])
+    ]
+
+    # Sort markets by top pair score descending, cap at 15 to keep prompt manageable
+    meaningful.sort(key=lambda g: g["pairs"][0].get("overall_similarity_score", 0), reverse=True)
+    meaningful = meaningful[:15]
+
+    if not meaningful:
+        return "## Market Signal Summaries\n\n*No markets with sufficient signal data.*\n"
+
+    # Build context block for the prompt
+    context_lines = []
+    for g in meaningful:
+        q = g["question"]
+        context_lines.append(f"\n### {q}")
+        for p in g["pairs"]:
+            ticker = p.get("ticker", "")
+            ticker_name = p.get("ticker_name", ticker)
+            score = p.get("overall_similarity_score", 0)
+            conf = p.get("confidence_level", "low")
+            findings = p.get("key_findings", [])
+            summary = p.get("agent_summary", "")
+            # Include agent summary and top 2 key findings
+            context_lines.append(f"  Instrument: {ticker} ({ticker_name}) | stat_score={score:.2f} | confidence={conf}")
+            if summary:
+                context_lines.append(f"  Agent summary: {summary}")
+            for f in findings[:2]:
+                context_lines.append(f"  Finding: {f}")
+
+    markets_context = "\n".join(context_lines)
+
+    prompt = market_summaries_instructions.format(markets_context=markets_context)
+
+    print("Generating Market Signal Summaries...")
+    try:
+        from langchain_core.messages import HumanMessage
+        message = llm.invoke([HumanMessage(content=prompt)])
+        body = message.content.strip()
+    except Exception as e:
+        print(f"Error generating market summaries: {e}")
+        body = "*Market summaries could not be generated.*"
+
+    return f"## Market Signal Summaries\n\n{body}\n"
+
+
 # =============================================================================
 # MAIN REPORT GENERATION PIPELINE
 # =============================================================================
 
-def generate_investment_report(llm, topic, context_data, output_file=None):
+def generate_investment_report(llm, topic, context_data, output_file=None, pairs=None):
     """
     Generate a complete investment report with all sections.
 
@@ -382,7 +488,10 @@ def generate_investment_report(llm, topic, context_data, output_file=None):
         # Generate Section 2: Asset Class Correlation Analysis
         correlation_analysis = generate_correlation_analysis(llm, topic, context_data)
 
-        # Generate Section 3: Investment Opportunities
+        # Generate Section 3: Per-Market Signal Summaries
+        market_summaries = generate_market_summaries(llm, pairs or [])
+
+        # Generate Section 4: Investment Opportunities
         investment_opportunities = generate_investment_opportunities(
             llm,
             topic,
@@ -395,6 +504,8 @@ def generate_investment_report(llm, topic, context_data, output_file=None):
 {topic_overview}
 
 {correlation_analysis}
+
+{market_summaries}
 
 {investment_opportunities}
 """
@@ -448,12 +559,18 @@ def generate_report_from_json(json_file_path, output_file=None):
         # Load the trend analysis data
         topic, context_data = load_trend_analysis_data(json_file_path)
 
+        # Also load raw pairs for per-market summaries
+        with open(json_file_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+        raw_pairs = raw_data.get('pairs', [])
+
         # Generate the investment report
         report = generate_investment_report(
             llm,
             topic=topic,
             context_data=context_data,
-            output_file=output_file
+            output_file=output_file,
+            pairs=raw_pairs,
         )
 
         return report
