@@ -537,10 +537,8 @@ body {
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 <script>
-const MARKETS   = __MARKETS__;
-const REPORT_MD = __REPORT__;
+const MARKETS = __MARKETS__;
 
 function esc(s) {
   if (s == null) return "";
@@ -863,16 +861,6 @@ function renderDetail(m) {
     `;
   }
 
-  /* Investment report — shown on all markets when available */
-  if (REPORT_MD) {
-    html += `
-      <div class="section">
-        <div class="section-title">Investment Analysis Report</div>
-        <div class="report-body" id="report-body"></div>
-      </div>
-    `;
-  }
-
   // Arbitrage signal banner (uses best pair's discovery)
   const bestDiscovery = best ? best.discovery : "";
   const bestTickerName = best ? best.ticker_name : "";
@@ -880,27 +868,6 @@ function renderDetail(m) {
 
   html += "</div>"; // detail-body
   document.getElementById("detail").innerHTML = html;
-
-  /* Render markdown after DOM update */
-  if (REPORT_MD) {
-    const el = document.getElementById("report-body");
-    if (el && typeof marked !== "undefined") {
-      el.innerHTML = marked.parse(REPORT_MD);
-    } else if (el) {
-      el.textContent = REPORT_MD;
-    }
-    // Scroll to this market's section in the report if it exists
-    if (el) {
-      const mq = (m.question || "").slice(0, 50).toLowerCase();
-      const headings = el.querySelectorAll("h3");
-      for (const h of headings) {
-        if (h.textContent.toLowerCase().slice(0, 50).includes(mq.slice(0, 30))) {
-          h.scrollIntoView({ behavior: "smooth", block: "start" });
-          break;
-        }
-      }
-    }
-  }
 }
 
 function toggleRow(id) {
@@ -931,8 +898,7 @@ def build_html(market_list, report_md, report_mid, analysis_ts) -> str:
     n_pairs   = sum(len(m['pairs']) for m in market_list)
 
     html = HTML_TEMPLATE
-    html = html.replace('__MARKETS__',   json.dumps(market_list,  ensure_ascii=False, default=str))
-    html = html.replace('__REPORT__',    json.dumps(report_md,    ensure_ascii=False))
+    html = html.replace('__MARKETS__', json.dumps(market_list, ensure_ascii=False, default=str))
     html = html.replace('__N_MARKETS__', str(n_markets))
     html = html.replace('__N_PAIRS__',   str(n_pairs))
     html = html.replace('__TS__',        ts_str)
