@@ -171,6 +171,7 @@ class FinanceSeriesWindowStats(BaseModel):
         None, description="LLM confidence score 1–100 for this ticker's relevance"
     )
     llm_predicted_direction: str | None = Field(
-        None, description="'up' or 'down' — LLM-predicted direction when Polymarket YES rises"
+        None, description="'with' or 'against' — alignment when Polymarket YES rises"
     )
     llm_company_name: str | None = Field(None, description="LLM-provided company/index name")
+    llm_rationale: str | None = Field(None, description="LLM explanation for why this instrument was selected")

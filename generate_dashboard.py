@@ -58,12 +58,13 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
             }
 
     # Pipeline JSON → LLM metadata per (market_id, series_id)
-    llm_meta: dict[tuple, dict] = {}  # (market_id, ticker) → {confidence, direction, company_name}
+    llm_meta: dict[tuple, dict] = {}  # (market_id, ticker) → {confidence, direction, company_name, rationale}
     pipeline_path = find_latest('pipeline_*.json')
     if pipeline_path:
         try:
             with open(pipeline_path, encoding='utf-8') as f:
                 pipeline = json.load(f)
+            # Load per-ticker rationale from finance_stats
             for stat in pipeline.get('finance_stats', []):
                 mid = str(stat.get('polymarket_id', ''))
                 ticker = str(stat.get('series_id', ''))
@@ -73,7 +74,16 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                         'llm_confidence':         int(conf),
                         'llm_predicted_direction': stat.get('llm_predicted_direction', ''),
                         'llm_company_name':        stat.get('llm_company_name', ''),
+                        'llm_rationale':           stat.get('llm_rationale', ''),
                     }
+            # Fill in rationale gaps from instrument_selections (separate key in pipeline JSON)
+            for sel in pipeline.get('instrument_selections', []):
+                mid = str(sel.get('market_id', ''))
+                for inst in sel.get('instruments', []):
+                    ticker = str(inst.get('ticker', ''))
+                    key = (mid, ticker)
+                    if key in llm_meta and not llm_meta[key].get('llm_rationale'):
+                        llm_meta[key]['llm_rationale'] = inst.get('rationale', '')
         except Exception:
             pass
 
@@ -119,6 +129,7 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
             'llm_confidence':    llm_conf,
             'llm_direction':     lm.get('llm_predicted_direction', ''),
             'llm_company_name':  lm.get('llm_company_name', ''),
+            'llm_rationale':     lm.get('llm_rationale', ''),
         })
 
     for m in markets.values():
@@ -258,8 +269,45 @@ body {
 .cat-earnings { background: #1a2e12; color: #56d364; }
 .cat-ma       { background: #1e1a3b; color: #a5a0ff; }
 .cat-social   { background: #1c2128; color: #8b949e; }
-.dir-up   { color: #3fb950; font-weight: 600; }
-.dir-down { color: #f85149; font-weight: 600; }
+.dir-with    { color: #3fb950; font-weight: 600; }
+.dir-against { color: #f85149; font-weight: 600; }
+
+/* Info modal */
+.info-btn {
+  margin-left: auto; background: none; border: 1px solid #30363d; border-radius: 50%;
+  width: 24px; height: 24px; color: #7d8590; cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.info-btn:hover { border-color: #58a6ff; color: #58a6ff; }
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 100; align-items: center; justify-content: center;
+}
+.modal-overlay.open { display: flex; }
+.modal-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  padding: 24px; max-width: 540px; width: 90%; max-height: 80vh; overflow-y: auto;
+}
+.modal-box h2 { font-size: 15px; color: #e6edf3; margin-bottom: 16px; }
+.modal-term { margin-bottom: 14px; }
+.modal-term dt { font-size: 12px; font-weight: 600; color: #58a6ff; margin-bottom: 3px; }
+.modal-term dd { font-size: 12px; color: #8b949e; line-height: 1.5; margin: 0; }
+.modal-close {
+  float: right; background: none; border: none; color: #7d8590;
+  font-size: 18px; cursor: pointer; padding: 0; line-height: 1;
+}
+.modal-close:hover { color: #e6edf3; }
+
+/* Expandable instrument row */
+.expand-row { display: none; background: #0d1117; }
+.expand-row.open { display: table-row; }
+.expand-cell { padding: 10px 14px 14px; border-bottom: 1px solid #21262d; }
+.expand-rationale { font-size: 12px; color: #c9d1d9; line-height: 1.5; margin-bottom: 8px; }
+.expand-stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: #7d8590; }
+.expand-stat-item strong { color: #e6edf3; }
+.expand-findings { margin-top: 8px; font-size: 11px; color: #8b949e; }
+.pairs-table tr.instrument-row { cursor: pointer; }
+.pairs-table tr.instrument-row:hover td { background: #161b22; }
 
 /* Detail panel */
 .detail { flex: 1; overflow-y: auto; }
@@ -384,6 +432,45 @@ body {
   <span class="header-stat">__N_MARKETS__ markets</span>
   <span class="header-stat">__N_PAIRS__ pairs</span>
   <span class="header-ts">Analysis: __TS__</span>
+  <button class="info-btn" onclick="document.getElementById('glossary-modal').classList.add('open')" title="Glossary">&#x2139;</button>
+</div>
+
+<!-- Glossary modal -->
+<div class="modal-overlay" id="glossary-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal-box">
+    <button class="modal-close" onclick="document.getElementById('glossary-modal').classList.remove('open')">&times;</button>
+    <h2>Term Definitions</h2>
+    <dl>
+      <div class="modal-term">
+        <dt>Composite Score</dt>
+        <dd>Blended signal: 40% Confidence + 35% Stat Score + 25% |Pearson r|. Higher = stronger overall signal.</dd>
+      </div>
+      <div class="modal-term">
+        <dt>Stat Score</dt>
+        <dd>Statistical similarity between Polymarket probability changes and financial returns, combining correlation, Granger causality, lead-lag CCF, event study, and volatility spillover tests. 0–1 scale.</dd>
+      </div>
+      <div class="modal-term">
+        <dt>Confidence</dt>
+        <dd>LLM-assessed likelihood (1–100) that this financial instrument meaningfully responds to the Polymarket outcome. 90+ = directly named company or instrument. 10–29 = tenuous connection. Below 10 = essentially guessing.</dd>
+      </div>
+      <div class="modal-term">
+        <dt>Alignment</dt>
+        <dd><strong>With</strong>: instrument price rises when Polymarket YES probability rises. <strong>Against</strong>: instrument price falls when YES probability rises (inverse relationship).</dd>
+      </div>
+      <div class="modal-term">
+        <dt>Discovery</dt>
+        <dd>Which market incorporated information first. <strong>Poly leads</strong>: Polymarket priced it before financial markets — potential trading edge. <strong>Fin leads</strong>: financial markets moved first — Polymarket odds may lag. <strong>Simultaneous</strong>: both markets moved together.</dd>
+      </div>
+      <div class="modal-term">
+        <dt>Pearson r</dt>
+        <dd>Linear correlation coefficient between Polymarket probability changes and financial returns over the aligned window. Range −1 to +1. Values near ±1 indicate strong co-movement.</dd>
+      </div>
+      <div class="modal-term">
+        <dt>n obs</dt>
+        <dd>Number of aligned hourly observations used in the statistical analysis. More observations = more reliable stats. Below 20 may produce unreliable results.</dd>
+      </div>
+    </dl>
+  </div>
 </div>
 
 <div class="main">
@@ -490,7 +577,7 @@ function yahooUrl(ticker) {
 /* ── Render feed ── */
 function renderFeed() {
   document.getElementById("feed").innerHTML = MARKETS.map(m => {
-    const llmConf = m.best_llm_conf != null ? `<span class="badge conf-medium">${m.best_llm_conf} LLM</span>` : "";
+    const llmConf = m.best_llm_conf != null ? `<span class="badge conf-medium">${m.best_llm_conf} conf</span>` : "";
     return `
     <div class="market-card" id="card-${esc(m.id)}" onclick="selectMarket('${esc(m.id)}')">
       <div class="card-question">${esc(m.question)}</div>
@@ -500,7 +587,7 @@ function renderFeed() {
         ${llmConf}
       </div>
       <div class="card-stats">
-        <span class="card-price">${m.price != null ? (m.price*100).toFixed(0)+"%" : "—"}</span>
+        <span class="card-price">${m.price != null ? m.price.toFixed(3) : "—"}</span>
         <span class="card-sep">·</span>
         <span class="card-ticker">${esc(m.best_ticker)}</span>
         <span class="card-score-wrap">
@@ -534,12 +621,12 @@ function renderDetail(m) {
       <div class="detail-question">${esc(m.question)}</div>
       <div class="detail-meta-row">
         <span class="badge cat-${catClass(m.category)}">${esc(m.category || "Unknown")}</span>
-        ${m.price != null ? `<span class="price-badge">${(m.price*100).toFixed(1)}% YES</span>` : ""}
+        ${m.price != null ? `<span class="price-badge">${m.price.toFixed(3)}</span>` : ""}
         ${m.end_date ? `<span class="meta-chip">Closes ${fmtDate(m.end_date)}</span>` : ""}
         ${m.vol24hr  ? `<span class="meta-chip">24h vol ${fmtNum(m.vol24hr)}</span>` : ""}
       </div>
       <div class="links-bar">
-        <a class="ext-link poly-link" href="${esc(polyUrl)}" target="_blank">View on Polymarket</a>
+        ${slug ? `<a class="ext-link poly-link" href="${esc('https://polymarket.com/event/'+slug)}" target="_blank">View on Polymarket</a>` : ""}
         ${topTicker ? `<a class="ext-link yahoo-link" href="${esc(yahooUrl(topTicker))}" target="_blank">${esc(topTicker)} on Yahoo Finance</a>` : ""}
       </div>
     </div>
@@ -550,29 +637,30 @@ function renderDetail(m) {
   /* Best pair summary */
   if (best) {
     const d = discLabel(best.discovery);
-    const llmDir = best.llm_direction
-      ? `<span class="dir-${best.llm_direction}">${best.llm_direction === "up" ? "▲" : "▼"} LLM predicts ${best.llm_direction}</span>`
+    const alignDir = best.llm_direction;
+    // Handle legacy up/down values
+    const alignNorm = alignDir === "up" ? "with" : alignDir === "down" ? "against" : alignDir;
+    const llmDir = alignNorm
+      ? `<span class="dir-${alignNorm}">${alignNorm === "with" ? "▲ With" : "▼ Against"}</span>`
       : "";
     const llmConf = best.llm_confidence != null
-      ? `<span class="badge conf-medium">LLM Confidence: ${best.llm_confidence}/100</span>`
+      ? `<span class="badge conf-medium">Confidence: ${best.llm_confidence}/100</span>`
       : "";
     const compScore = ((best.composite||0)*100).toFixed(1);
     const statScore = ((best.score||0)*100).toFixed(1);
-    const pearsonR  = best.pearson_r != null ? best.pearson_r.toFixed(3) : "—";
     html += `
       <div class="section">
-        <div class="section-title">Top Instrument (by LLM Confidence) — ${esc(best.llm_company_name || best.ticker_name)} (${esc(best.ticker)})</div>
+        <div class="section-title">Top Instrument — ${esc(best.llm_company_name || best.ticker_name)} (${esc(best.ticker)})</div>
         <div class="summary-card">
           <div class="summary-conf-row">
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               ${llmConf}
-              ${llmDir}
+              ${llmDir ? `<span style="font-size:12px;">Alignment: ${llmDir}</span>` : ""}
               <span class="badge conf-${best.confidence}">${best.confidence.toUpperCase()} stat</span>
             </div>
             <div style="display:flex;gap:14px;font-size:12px;color:#8b949e;text-align:right;">
               <div><div style="color:#e6edf3;font-weight:600;">${compScore}</div><div>Composite</div></div>
               <div><div style="color:#e6edf3;font-weight:600;">${statScore}</div><div>Stat Score</div></div>
-              <div><div style="color:#e6edf3;font-weight:600;">${pearsonR}</div><div>Pearson r</div></div>
               <div><div style="color:#8b949e;font-size:11px;">${best.n_obs} obs</div></div>
             </div>
           </div>
@@ -597,48 +685,71 @@ function renderDetail(m) {
 
   /* All instruments table (always shown if any pairs) */
   if (m.pairs && m.pairs.length > 0) {
+    const rowsHtml = m.pairs.map((p,i) => {
+      const comp = ((p.composite||0)*100).toFixed(0);
+      const sc   = ((p.score||0)*100).toFixed(0);
+      const pr   = p.pearson_r != null ? p.pearson_r.toFixed(3) : "—";
+      const d    = discLabel(p.discovery);
+      const rowId = `row-expand-${esc(m.id)}-${i}`;
+      // Normalize alignment (handle legacy up/down)
+      const alignRaw = p.llm_direction;
+      const alignNorm = alignRaw === "up" ? "with" : alignRaw === "down" ? "against" : alignRaw;
+      const dirHtml = alignNorm
+        ? `<span class="dir-${alignNorm}">${alignNorm === "with" ? "▲ With" : "▼ Against"}</span>`
+        : "<span style='color:#7d8590;'>—</span>";
+      const confHtml = p.llm_confidence != null
+        ? `<strong style="color:#e6edf3;">${p.llm_confidence}</strong><span style="color:#7d8590;">/100</span>`
+        : "<span style='color:#7d8590;'>—</span>";
+      const nameDisp = p.llm_company_name || p.ticker_name;
+      const findingsHtml = p.findings && p.findings.length
+        ? `<div class="expand-findings"><strong style="color:#7d8590;">Key findings:</strong><ul style="margin:4px 0 0 16px;list-style:disc;">
+            ${p.findings.slice(0,3).map(f=>`<li style="margin-bottom:3px;">${esc(f)}</li>`).join("")}
+           </ul></div>` : "";
+      const caveatsHtml = p.caveats && p.caveats.length
+        ? `<div class="expand-findings" style="margin-top:6px;"><strong style="color:#d29922;">Caveats:</strong><ul style="margin:4px 0 0 16px;list-style:disc;">
+            ${p.caveats.slice(0,2).map(c=>`<li style="margin-bottom:3px;">${esc(c)}</li>`).join("")}
+           </ul></div>` : "";
+      return `
+        <tr class="instrument-row" onclick="toggleRow('${rowId}')">
+          <td><code>${esc(p.ticker)}</code></td>
+          <td style="color:#8b949e;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(nameDisp)}">${esc(nameDisp)}</td>
+          <td>${confHtml}</td>
+          <td>${dirHtml}</td>
+          <td>
+            <div class="score-bar">
+              <div class="score-track"><div class="score-fill" style="width:${Math.min(p.composite||0,1)*100}%"></div></div>
+              <span style="font-size:11px;color:#8b949e;">${comp}</span>
+            </div>
+          </td>
+          <td style="color:#7d8590;font-size:11px;">${sc}</td>
+          <td><span class="${d.cls}">${d.label}</span></td>
+          <td><a class="table-link" href="${esc(yahooUrl(p.ticker))}" target="_blank" onclick="event.stopPropagation()">Yahoo</a></td>
+        </tr>
+        <tr class="expand-row" id="${rowId}">
+          <td class="expand-cell" colspan="8">
+            ${p.llm_rationale ? `<div class="expand-rationale"><strong style="color:#58a6ff;">Selection rationale:</strong> ${esc(p.llm_rationale)}</div>` : ""}
+            <div class="expand-stats">
+              <span class="expand-stat-item">Pearson r: <strong>${pr}</strong></span>
+              <span class="expand-stat-item">n obs: <strong>${p.n_obs}</strong></span>
+              <span class="expand-stat-item">Stat score: <strong>${sc}/100</strong></span>
+              ${p.summary ? `<span class="expand-stat-item" style="flex-basis:100%;color:#8b949e;font-style:italic;">${esc(p.summary)}</span>` : ""}
+            </div>
+            ${findingsHtml}
+            ${caveatsHtml}
+          </td>
+        </tr>`;
+    }).join("");
     html += `
       <div class="section">
-        <div class="section-title">All Instruments (${m.pairs.length}) — Ranked by LLM Confidence</div>
+        <div class="section-title">All Instruments (${m.pairs.length}) — click row for details</div>
         <table class="pairs-table">
           <thead><tr>
             <th>Ticker</th><th>Company / Instrument</th>
-            <th>LLM Conf</th><th>LLM Direction</th>
-            <th>Composite</th><th>Stat Score</th><th>Pearson r</th>
+            <th>Confidence</th><th>Alignment</th>
+            <th>Composite</th><th>Stat Score</th>
             <th>Discovery</th><th></th>
           </tr></thead>
-          <tbody>
-            ${m.pairs.map((p,i) => {
-              const comp = ((p.composite||0)*100).toFixed(0);
-              const sc   = ((p.score||0)*100).toFixed(0);
-              const pr   = p.pearson_r != null ? p.pearson_r.toFixed(3) : "—";
-              const d    = discLabel(p.discovery);
-              const dirHtml = p.llm_direction
-                ? `<span class="dir-${p.llm_direction}">${p.llm_direction === "up" ? "▲" : "▼"} ${p.llm_direction}</span>`
-                : "<span style='color:#7d8590;'>—</span>";
-              const confHtml = p.llm_confidence != null
-                ? `<strong style="color:#e6edf3;">${p.llm_confidence}</strong><span style="color:#7d8590;">/100</span>`
-                : "<span style='color:#7d8590;'>—</span>";
-              const nameDisp = p.llm_company_name || p.ticker_name;
-              return `
-                <tr>
-                  <td><code>${esc(p.ticker)}</code></td>
-                  <td style="color:#8b949e;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(nameDisp)}">${esc(nameDisp)}</td>
-                  <td>${confHtml}</td>
-                  <td>${dirHtml}</td>
-                  <td>
-                    <div class="score-bar">
-                      <div class="score-track"><div class="score-fill" style="width:${Math.min(p.composite||0,1)*100}%"></div></div>
-                      <span style="font-size:11px;color:#8b949e;">${comp}</span>
-                    </div>
-                  </td>
-                  <td style="color:#7d8590;font-size:11px;">${sc}</td>
-                  <td style="color:#7d8590;font-size:11px;">${pr}</td>
-                  <td><span class="${d.cls}">${d.label}</span></td>
-                  <td><a class="table-link" href="${esc(yahooUrl(p.ticker))}" target="_blank">Yahoo</a></td>
-                </tr>`;
-            }).join("")}
-          </tbody>
+          <tbody>${rowsHtml}</tbody>
         </table>
       </div>
     `;
@@ -671,6 +782,11 @@ function renderDetail(m) {
       el.textContent = REPORT_MD;
     }
   }
+}
+
+function toggleRow(id) {
+  const row = document.getElementById(id);
+  if (row) row.classList.toggle('open');
 }
 
 /* ── Init ── */

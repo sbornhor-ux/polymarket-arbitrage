@@ -251,7 +251,7 @@ def run_finance_agent(csv_path: Path) -> Path:
 
             # Build a metadata lookup keyed by ticker
             llm_meta = {
-                p.ticker: (p.confidence, p.predicted_direction, p.company_name)
+                p.ticker: (p.confidence, p.predicted_direction, p.company_name, p.rationale)
                 for p in selection.instruments
             }
 
@@ -264,10 +264,11 @@ def run_finance_agent(csv_path: Path) -> Path:
             # Attach LLM metadata to each stat record
             for stat in stats:
                 if stat.series_id in llm_meta:
-                    conf, direction, name = llm_meta[stat.series_id]
+                    conf, direction, name, rationale = llm_meta[stat.series_id]
                     stat.llm_confidence = conf
                     stat.llm_predicted_direction = direction
                     stat.llm_company_name = name
+                    stat.llm_rationale = rationale
 
             all_stats.extend(stats)
             snapshots.append(snap)
