@@ -97,8 +97,9 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                 'end_date': row.get('end_date', ''),
             }
 
-    # Pipeline JSON → LLM metadata per (market_id, series_id)
+    # Pipeline JSON → LLM metadata per (market_id, series_id) + per-market selection rationale
     llm_meta: dict[tuple, dict] = {}  # (market_id, ticker) → {confidence, direction, company_name, rationale}
+    sel_rationale: dict[str, str] = {}  # market_id → overall selection rationale
     pipeline_path = find_latest('pipeline_*.json')
     if pipeline_path:
         try:
@@ -116,9 +117,11 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                         'llm_company_name':        stat.get('llm_company_name', ''),
                         'llm_rationale':           stat.get('llm_rationale', ''),
                     }
-            # Fill in rationale gaps from instrument_selections (separate key in pipeline JSON)
+            # Fill in rationale gaps from instrument_selections + capture market-level rationale
             for sel in pipeline.get('instrument_selections', []):
                 mid = str(sel.get('market_id', ''))
+                if mid and sel.get('selection_rationale'):
+                    sel_rationale[mid] = sel['selection_rationale']
                 for inst in sel.get('instruments', []):
                     ticker = str(inst.get('ticker', ''))
                     key = (mid, ticker)
@@ -137,18 +140,21 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
         if mid not in markets:
             m = meta.get(mid, {})
             markets[mid] = {
-                'id':       mid,
-                'question': p['polymarket_question'],
-                'category': m.get('category', ''),
-                'slug':     m.get('slug', ''),
-                'price':    m.get('price'),
-                'vol24hr':  m.get('vol24hr'),
-                'end_date': m.get('end_date', ''),
-                'pairs':    [],
+                'id':           mid,
+                'question':     p['polymarket_question'],
+                'category':     m.get('category', ''),
+                'slug':         m.get('slug', ''),
+                'price':        m.get('price'),
+                'vol24hr':      m.get('vol24hr'),
+                'end_date':     m.get('end_date', ''),
+                'sel_rationale': sel_rationale.get(mid, ''),
+                'pairs':        [],
             }
         ticker = p['ticker']
         corr   = p.get('correlation') or {}
         ses    = p.get('spike_event_study') or {}
+        llc    = p.get('lead_lag_ccf') or {}
+        div    = p.get('divergence_signal') or {}
         stat_score  = p.get('overall_similarity_score') or 0.0
         pearson_r   = corr.get('pearson_r')
         lm          = llm_meta.get((mid, ticker), {})
@@ -170,6 +176,8 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
             'llm_direction':     lm.get('llm_predicted_direction', ''),
             'llm_company_name':  lm.get('llm_company_name', ''),
             'llm_rationale':     lm.get('llm_rationale', ''),
+            'llm_interp':        llc.get('interpretation', ''),
+            'divergence_interp': div.get('interpretation', '') if div.get('signal_direction', 'no_signal') != 'no_signal' else '',
         })
 
     for m in markets.values():
@@ -729,14 +737,49 @@ function renderDetail(m) {
     `;
   }
 
-  /* Per-market signal summary */
-  if (m.market_summary) {
-    html += `
-      <div class="section">
-        <div class="section-title">Market Signal Summary</div>
-        <div class="summary-card" style="font-size:13px;line-height:1.6;color:#c9d1d9;">${esc(m.market_summary)}</div>
-      </div>
-    `;
+  /* Signal Analysis — built from synthesizer summary + selection rationale + best pair stats */
+  {
+    const best2 = m.pairs && m.pairs[0];
+    const hasAny = m.market_summary || m.sel_rationale || (best2 && best2.llm_interp);
+    if (hasAny) {
+      let reportHtml = '';
+
+      // Synthesizer paragraph (LLM-generated) — most prominent
+      if (m.market_summary) {
+        reportHtml += `<p style="margin:0 0 14px;font-size:13px;line-height:1.7;color:#c9d1d9;">${esc(m.market_summary)}</p>`;
+      }
+
+      // Lead-lag interpretation from best pair
+      if (best2 && best2.llm_interp) {
+        reportHtml += `
+          <div style="background:#0c2d4d;border:1px solid #388bfd30;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#8b949e;line-height:1.5;">
+            <strong style="color:#58a6ff;">Price Discovery:</strong> ${esc(best2.llm_interp)}
+          </div>`;
+      }
+
+      // Divergence signal from best pair
+      if (best2 && best2.divergence_interp) {
+        reportHtml += `
+          <div style="background:#1a2e12;border:1px solid #3fb95030;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#8b949e;line-height:1.5;">
+            <strong style="color:#3fb950;">Live Divergence:</strong> ${esc(best2.divergence_interp)}
+          </div>`;
+      }
+
+      // Instrument selection rationale (overall assessment from LLM)
+      if (m.sel_rationale) {
+        reportHtml += `
+          <div style="border-top:1px solid #21262d;padding-top:10px;margin-top:4px;font-size:12px;color:#7d8590;line-height:1.6;">
+            <strong style="color:#8b949e;">Instrument Selection Assessment:</strong> ${esc(m.sel_rationale)}
+          </div>`;
+      }
+
+      html += `
+        <div class="section">
+          <div class="section-title">Signal Analysis</div>
+          <div class="summary-card">${reportHtml}</div>
+        </div>
+      `;
+    }
   }
 
   /* All instruments table (always shown if any pairs) */
@@ -765,6 +808,14 @@ function renderDetail(m) {
         ? `<div class="expand-findings" style="margin-top:6px;"><strong style="color:#d29922;">Caveats:</strong><ul style="margin:4px 0 0 16px;list-style:disc;">
             ${p.caveats.slice(0,2).map(c=>`<li style="margin-bottom:3px;">${esc(c)}</li>`).join("")}
            </ul></div>` : "";
+      const llmInterpHtml = p.llm_interp ? `
+        <div style="background:#0c2d4d;border:1px solid #388bfd30;border-radius:5px;padding:8px 12px;margin-top:8px;font-size:11px;color:#8b949e;line-height:1.5;">
+          <strong style="color:#58a6ff;">Lead-lag:</strong> ${esc(p.llm_interp)}
+        </div>` : "";
+      const divInterpHtml = p.divergence_interp ? `
+        <div style="background:#1a2e12;border:1px solid #3fb95030;border-radius:5px;padding:8px 12px;margin-top:6px;font-size:11px;color:#8b949e;line-height:1.5;">
+          <strong style="color:#3fb950;">Divergence:</strong> ${esc(p.divergence_interp)}
+        </div>` : "";
       return `
         <tr class="instrument-row" onclick="toggleRow('${rowId}')">
           <td><code>${esc(p.ticker)}</code></td>
@@ -783,13 +834,16 @@ function renderDetail(m) {
         </tr>
         <tr class="expand-row" id="${rowId}">
           <td class="expand-cell" colspan="8">
-            ${p.llm_rationale ? `<div class="expand-rationale"><strong style="color:#58a6ff;">Selection rationale:</strong> ${esc(p.llm_rationale)}</div>` : ""}
+            ${p.llm_rationale ? `<div class="expand-rationale"><strong style="color:#58a6ff;">Why selected:</strong> ${esc(p.llm_rationale)}</div>` : ""}
             <div class="expand-stats">
               <span class="expand-stat-item">Pearson r: <strong>${pr}</strong></span>
               <span class="expand-stat-item">n obs: <strong>${p.n_obs}</strong></span>
               <span class="expand-stat-item">Stat score: <strong>${sc}/100</strong></span>
-              ${p.summary ? `<span class="expand-stat-item" style="flex-basis:100%;color:#8b949e;font-style:italic;">${esc(p.summary)}</span>` : ""}
+              <span class="expand-stat-item">Composite: <strong>${comp}/100</strong></span>
             </div>
+            ${p.summary ? `<div style="margin-top:8px;font-size:12px;color:#8b949e;line-height:1.5;font-style:italic;">${esc(p.summary)}</div>` : ""}
+            ${llmInterpHtml}
+            ${divInterpHtml}
             ${findingsHtml}
             ${caveatsHtml}
           </td>

@@ -399,15 +399,11 @@ def generate_market_summaries(llm, pairs: list) -> str:
         g["pairs"].sort(key=lambda x: x.get("overall_similarity_score", 0), reverse=True)
         g["pairs"] = g["pairs"][:3]
 
-    # Filter to markets that have at least one meaningful signal
-    meaningful = [
-        g for g in market_groups.values()
-        if any(p.get("overall_similarity_score", 0) >= 0.05 for p in g["pairs"])
-    ]
+    # Include all markets with at least some data (no minimum score filter)
+    meaningful = list(market_groups.values())
 
-    # Sort markets by top pair score descending, cap at 15 to keep prompt manageable
+    # Sort by top pair score descending
     meaningful.sort(key=lambda g: g["pairs"][0].get("overall_similarity_score", 0), reverse=True)
-    meaningful = meaningful[:15]
 
     if not meaningful:
         return "## Market Signal Summaries\n\n*No markets with sufficient signal data.*\n"
