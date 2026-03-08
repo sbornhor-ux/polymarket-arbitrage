@@ -612,11 +612,14 @@ function renderDetail(m) {
     `;
   }
 
-  /* Synthesizer report */
-  if (hasReport) {
+  /* Investment report — shown on all markets when available */
+  if (REPORT_MD) {
+    // If this market has its own section in the report, pre-select that heading anchor
+    const mq = m.question || "";
+    const anchor = mq.trim().slice(0, 50).toLowerCase().replace(/[^a-z0-9]+/g, "-");
     html += `
       <div class="section">
-        <div class="section-title">Investment Report</div>
+        <div class="section-title">Investment Analysis Report</div>
         <div class="report-body" id="report-body"></div>
       </div>
     `;
@@ -631,12 +634,23 @@ function renderDetail(m) {
   document.getElementById("detail").innerHTML = html;
 
   /* Render markdown after DOM update */
-  if (hasReport) {
+  if (REPORT_MD) {
     const el = document.getElementById("report-body");
     if (el && typeof marked !== "undefined") {
       el.innerHTML = marked.parse(REPORT_MD);
     } else if (el) {
       el.textContent = REPORT_MD;
+    }
+    // Scroll to this market's section in the report if it exists
+    if (el) {
+      const mq = (m.question || "").slice(0, 50).toLowerCase();
+      const headings = el.querySelectorAll("h3");
+      for (const h of headings) {
+        if (h.textContent.toLowerCase().slice(0, 50).includes(mq.slice(0, 30))) {
+          h.scrollIntoView({ behavior: "smooth", block: "start" });
+          break;
+        }
+      }
     }
   }
 }
