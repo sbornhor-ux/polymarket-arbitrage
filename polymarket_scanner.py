@@ -81,7 +81,8 @@ class ScannerConfig:
         # --- Banking & Corporate Finance ---
         'bank', 'banks', 'banking', 'financial', 'finance',
         'earnings', 'revenue', 'profit', 'dividend', 'eps',
-        'ipo', 'merger', 'acquisition', 'buyout', 'bankruptcy',
+        'ipo', 'merger', 'acquisition', 'acquire', 'acquires', 'takeover',
+        'buyout', 'bankruptcy', 'spin-off', 'spinoff', 'divestiture',
         'private equity', 'venture capital', 'spac', 'leverage', 'margin',
         'sec', 'regulation', 'antitrust', 'fdic', 'occ',
 
@@ -553,6 +554,26 @@ class PolymarketClient:
         ]) or re.search(r'\bfed\b', text):
             return 'Fed / Monetary Policy'
 
+        # Earnings / Corporate Events — check before generic Financial Markets
+        if any(kw in text for kw in [
+            'earnings', 'earnings report', 'eps', 'revenue', 'quarterly results',
+            'q1 ', 'q2 ', 'q3 ', 'q4 ', 'annual results', 'profit', 'guidance',
+            'beats estimates', 'misses estimates', 'dividend', 'buyback',
+            'stock split', 'share repurchase', 'analyst upgrade', 'analyst downgrade',
+            'price target', 'outperform', 'underperform',
+        ]):
+            return 'Earnings / Corporate Events'
+
+        # M&A / IPO — check before generic Financial Markets
+        if any(kw in text for kw in [
+            'merger', 'acquisition', 'acquire', 'takeover', 'buyout',
+            'ipo', 'initial public offering', 'go public', 'listing',
+            'spac', 'spin-off', 'spinoff', 'divestiture', 'private equity',
+            'deal closes', 'regulatory approval', 'antitrust', 'doj block',
+            'sec filing', 'tender offer',
+        ]):
+            return 'M&A / IPO'
+
         # US Politics
         if any(kw in text for kw in [
             'president', 'congress', 'senate', 'house of representatives',
@@ -587,8 +608,7 @@ class PolymarketClient:
         if any(kw in text for kw in [
             's&p', 'sp500', 'nasdaq', 'dow jones', 'ftse', 'nikkei', 'dax',
             'stock', 'equity', 'bond yield', 'treasury', 'yield curve',
-            'etf', 'ipo', 'earnings', 'merger', 'acquisition',
-            'oil', 'gold', 'silver', 'opec', 'brent', 'wti', 'crude',
+            'etf', 'oil', 'gold', 'silver', 'opec', 'brent', 'wti', 'crude',
             'forex', 'dollar', 'euro', 'currency', 'exchange rate',
         ]):
             return 'Financial Markets'

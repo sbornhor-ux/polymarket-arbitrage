@@ -30,6 +30,15 @@ def find_latest(pattern: str) -> Path | None:
     return files[0] if files else None
 
 
+def _composite_score(stat_score: float, llm_conf: int | None, pearson_r: float | None) -> float:
+    """Composite score blending statistical similarity, LLM confidence, and correlation."""
+    s = float(stat_score or 0.0)
+    c = float(llm_conf or 0) / 100.0  # normalise to 0-1
+    r = abs(float(pearson_r or 0.0))  # absolute Pearson r (0-1)
+    # Weights: LLM confidence 40%, stat score 35%, |pearson r| 25%
+    return round(0.40 * c + 0.35 * s + 0.25 * r, 4)
+
+
 def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
     # CSV → market metadata keyed by market_id
     meta = {}
@@ -47,6 +56,26 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                 'vol24hr':  _f('volume24hr'),
                 'end_date': row.get('end_date', ''),
             }
+
+    # Pipeline JSON → LLM metadata per (market_id, series_id)
+    llm_meta: dict[tuple, dict] = {}  # (market_id, ticker) → {confidence, direction, company_name}
+    pipeline_path = find_latest('pipeline_*.json')
+    if pipeline_path:
+        try:
+            with open(pipeline_path, encoding='utf-8') as f:
+                pipeline = json.load(f)
+            for stat in pipeline.get('finance_stats', []):
+                mid = str(stat.get('polymarket_id', ''))
+                ticker = str(stat.get('series_id', ''))
+                conf = stat.get('llm_confidence')
+                if conf is not None:
+                    llm_meta[(mid, ticker)] = {
+                        'llm_confidence':         int(conf),
+                        'llm_predicted_direction': stat.get('llm_predicted_direction', ''),
+                        'llm_company_name':        stat.get('llm_company_name', ''),
+                    }
+        except Exception:
+            pass
 
     # Trend analysis JSON
     with open(trend_path, encoding='utf-8') as f:
@@ -67,28 +96,40 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                 'end_date': m.get('end_date', ''),
                 'pairs':    [],
             }
-        corr = p.get('correlation') or {}
-        ses  = p.get('spike_event_study') or {}
+        ticker = p['ticker']
+        corr   = p.get('correlation') or {}
+        ses    = p.get('spike_event_study') or {}
+        stat_score  = p.get('overall_similarity_score') or 0.0
+        pearson_r   = corr.get('pearson_r')
+        lm          = llm_meta.get((mid, ticker), {})
+        llm_conf    = lm.get('llm_confidence')
+        composite   = _composite_score(stat_score, llm_conf, pearson_r)
         markets[mid]['pairs'].append({
-            'ticker':      p['ticker'],
-            'ticker_name': p['ticker_name'],
-            'score':       p.get('overall_similarity_score') or 0.0,
-            'confidence':  p.get('confidence_level', 'low'),
-            'summary':     p.get('agent_summary', ''),
-            'findings':    p.get('key_findings', []),
-            'caveats':     p.get('caveats', []),
-            'discovery':   ses.get('discovery_direction', ''),
-            'pearson_r':   corr.get('pearson_r'),
-            'n_obs':       p.get('n_observations', 0),
+            'ticker':            ticker,
+            'ticker_name':       p['ticker_name'],
+            'score':             stat_score,
+            'composite':         composite,
+            'confidence':        p.get('confidence_level', 'low'),
+            'summary':           p.get('agent_summary', ''),
+            'findings':          p.get('key_findings', []),
+            'caveats':           p.get('caveats', []),
+            'discovery':         ses.get('discovery_direction', ''),
+            'pearson_r':         pearson_r,
+            'n_obs':             p.get('n_observations', 0),
+            'llm_confidence':    llm_conf,
+            'llm_direction':     lm.get('llm_predicted_direction', ''),
+            'llm_company_name':  lm.get('llm_company_name', ''),
         })
 
     for m in markets.values():
-        m['pairs'].sort(key=lambda p: p['score'], reverse=True)
+        # Sort by LLM confidence descending (the new primary ranking key)
+        m['pairs'].sort(key=lambda p: (p['llm_confidence'] or 0, p['composite']), reverse=True)
         b = m['pairs'][0] if m['pairs'] else {}
         m['best_ticker']      = b.get('ticker', '')
-        m['best_ticker_name'] = b.get('ticker_name', '')
-        m['best_score']       = b.get('score', 0.0)
+        m['best_ticker_name'] = b.get('llm_company_name') or b.get('ticker_name', '')
+        m['best_score']       = b.get('composite', 0.0)
         m['best_confidence']  = b.get('confidence', 'low')
+        m['best_llm_conf']    = b.get('llm_confidence')
 
     market_list = sorted(
         markets.values(),
@@ -214,7 +255,11 @@ body {
 .cat-geo      { background: #3b1f0a; color: #e3b341; }
 .cat-macro    { background: #0b2e2a; color: #39d353; }
 .cat-fin      { background: #102010; color: #3fb950; }
+.cat-earnings { background: #1a2e12; color: #56d364; }
+.cat-ma       { background: #1e1a3b; color: #a5a0ff; }
 .cat-social   { background: #1c2128; color: #8b949e; }
+.dir-up   { color: #3fb950; font-weight: 600; }
+.dir-down { color: #f85149; font-weight: 600; }
 
 /* Detail panel */
 .detail { flex: 1; overflow-y: auto; }
@@ -368,6 +413,8 @@ function catClass(cat) {
   if (!cat) return "social";
   const c = cat.toLowerCase();
   if (c.includes("fed") || c.includes("monetary")) return "fed";
+  if (c.includes("earnings") || c.includes("corporate")) return "earnings";
+  if (c.includes("m&a") || c.includes("ipo")) return "ma";
   if (c.includes("politics") || c.includes("political")) return "politics";
   if (c.includes("geo")) return "geo";
   if (c.includes("econ") || c.includes("macro")) return "macro";
@@ -442,12 +489,15 @@ function yahooUrl(ticker) {
 
 /* ── Render feed ── */
 function renderFeed() {
-  document.getElementById("feed").innerHTML = MARKETS.map(m => `
+  document.getElementById("feed").innerHTML = MARKETS.map(m => {
+    const llmConf = m.best_llm_conf != null ? `<span class="badge conf-medium">${m.best_llm_conf} LLM</span>` : "";
+    return `
     <div class="market-card" id="card-${esc(m.id)}" onclick="selectMarket('${esc(m.id)}')">
       <div class="card-question">${esc(m.question)}</div>
       <div class="card-badges">
         <span class="badge cat-${catClass(m.category)}">${esc(m.category || "Unknown")}</span>
         <span class="badge conf-${m.best_confidence}">${m.best_confidence.toUpperCase()}</span>
+        ${llmConf}
       </div>
       <div class="card-stats">
         <span class="card-price">${m.price != null ? (m.price*100).toFixed(0)+"%" : "—"}</span>
@@ -455,11 +505,11 @@ function renderFeed() {
         <span class="card-ticker">${esc(m.best_ticker)}</span>
         <span class="card-score-wrap">
           <div class="card-score-num">${((m.best_score||0)*100).toFixed(0)}</div>
-          <div class="card-score-label">score</div>
+          <div class="card-score-label">composite</div>
         </span>
       </div>
     </div>
-  `).join("");
+  `}).join("");
 }
 
 /* ── Select market ── */
@@ -500,17 +550,31 @@ function renderDetail(m) {
   /* Best pair summary */
   if (best) {
     const d = discLabel(best.discovery);
+    const llmDir = best.llm_direction
+      ? `<span class="dir-${best.llm_direction}">${best.llm_direction === "up" ? "▲" : "▼"} LLM predicts ${best.llm_direction}</span>`
+      : "";
+    const llmConf = best.llm_confidence != null
+      ? `<span class="badge conf-medium">LLM Confidence: ${best.llm_confidence}/100</span>`
+      : "";
+    const compScore = ((best.composite||0)*100).toFixed(1);
+    const statScore = ((best.score||0)*100).toFixed(1);
+    const pearsonR  = best.pearson_r != null ? best.pearson_r.toFixed(3) : "—";
     html += `
       <div class="section">
-        <div class="section-title">Best Match — ${esc(best.ticker_name)}</div>
+        <div class="section-title">Top Instrument (by LLM Confidence) — ${esc(best.llm_company_name || best.ticker_name)} (${esc(best.ticker)})</div>
         <div class="summary-card">
           <div class="summary-conf-row">
-            <span class="badge conf-${best.confidence}">${best.confidence.toUpperCase()} confidence</span>
-            <span style="font-size:13px;color:#8b949e;">
-              Similarity: <strong style="color:#e6edf3;">${((best.score||0)*100).toFixed(1)}</strong>/100
-              &nbsp;·&nbsp; ${d.label !== "—" ? `<span class="${d.cls}">${d.label}</span>` : "No signal"}
-              &nbsp;·&nbsp; ${best.n_obs} obs
-            </span>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              ${llmConf}
+              ${llmDir}
+              <span class="badge conf-${best.confidence}">${best.confidence.toUpperCase()} stat</span>
+            </div>
+            <div style="display:flex;gap:14px;font-size:12px;color:#8b949e;text-align:right;">
+              <div><div style="color:#e6edf3;font-weight:600;">${compScore}</div><div>Composite</div></div>
+              <div><div style="color:#e6edf3;font-weight:600;">${statScore}</div><div>Stat Score</div></div>
+              <div><div style="color:#e6edf3;font-weight:600;">${pearsonR}</div><div>Pearson r</div></div>
+              <div><div style="color:#8b949e;font-size:11px;">${best.n_obs} obs</div></div>
+            </div>
           </div>
           ${best.summary ? `<p class="agent-summary">${esc(best.summary)}</p>` : ""}
           ${best.findings && best.findings.length ? `
@@ -531,33 +595,46 @@ function renderDetail(m) {
     `;
   }
 
-  /* All pairs table (if more than 1 pair) */
-  if (m.pairs && m.pairs.length > 1) {
+  /* All instruments table (always shown if any pairs) */
+  if (m.pairs && m.pairs.length > 0) {
     html += `
       <div class="section">
-        <div class="section-title">All Financial Pairs (${m.pairs.length})</div>
+        <div class="section-title">All Instruments (${m.pairs.length}) — Ranked by LLM Confidence</div>
         <table class="pairs-table">
           <thead><tr>
-            <th>Ticker</th><th>Instrument</th><th>Score</th>
-            <th>Confidence</th><th>Discovery</th><th>Obs</th><th></th>
+            <th>Ticker</th><th>Company / Instrument</th>
+            <th>LLM Conf</th><th>LLM Direction</th>
+            <th>Composite</th><th>Stat Score</th><th>Pearson r</th>
+            <th>Discovery</th><th></th>
           </tr></thead>
           <tbody>
-            ${m.pairs.map(p => {
-              const sc = ((p.score||0)*100).toFixed(0);
-              const d  = discLabel(p.discovery);
+            ${m.pairs.map((p,i) => {
+              const comp = ((p.composite||0)*100).toFixed(0);
+              const sc   = ((p.score||0)*100).toFixed(0);
+              const pr   = p.pearson_r != null ? p.pearson_r.toFixed(3) : "—";
+              const d    = discLabel(p.discovery);
+              const dirHtml = p.llm_direction
+                ? `<span class="dir-${p.llm_direction}">${p.llm_direction === "up" ? "▲" : "▼"} ${p.llm_direction}</span>`
+                : "<span style='color:#7d8590;'>—</span>";
+              const confHtml = p.llm_confidence != null
+                ? `<strong style="color:#e6edf3;">${p.llm_confidence}</strong><span style="color:#7d8590;">/100</span>`
+                : "<span style='color:#7d8590;'>—</span>";
+              const nameDisp = p.llm_company_name || p.ticker_name;
               return `
                 <tr>
                   <td><code>${esc(p.ticker)}</code></td>
-                  <td style="color:#8b949e;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.ticker_name)}</td>
+                  <td style="color:#8b949e;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(nameDisp)}">${esc(nameDisp)}</td>
+                  <td>${confHtml}</td>
+                  <td>${dirHtml}</td>
                   <td>
                     <div class="score-bar">
-                      <div class="score-track"><div class="score-fill" style="width:${Math.min(p.score||0,1)*100}%"></div></div>
-                      <span style="font-size:11px;color:#8b949e;">${sc}</span>
+                      <div class="score-track"><div class="score-fill" style="width:${Math.min(p.composite||0,1)*100}%"></div></div>
+                      <span style="font-size:11px;color:#8b949e;">${comp}</span>
                     </div>
                   </td>
-                  <td><span class="badge conf-${p.confidence}">${p.confidence.toUpperCase()}</span></td>
+                  <td style="color:#7d8590;font-size:11px;">${sc}</td>
+                  <td style="color:#7d8590;font-size:11px;">${pr}</td>
                   <td><span class="${d.cls}">${d.label}</span></td>
-                  <td style="color:#7d8590;">${p.n_obs}</td>
                   <td><a class="table-link" href="${esc(yahooUrl(p.ticker))}" target="_blank">Yahoo</a></td>
                 </tr>`;
             }).join("")}

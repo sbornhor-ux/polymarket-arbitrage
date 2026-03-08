@@ -54,6 +54,17 @@ def compute_window_stats(
     window_full = series_df.loc[window_mask]
     window_data = window_full["close"] if not window_full.empty else pd.Series(dtype=float)
 
+    # If the exact window has no data (e.g. overnight / pre-market for equity tickers),
+    # expand ±24 hours to capture the nearest adjacent trading session.
+    expanded_window = False
+    if window_data.empty:
+        expanded_start = window_start - pd.Timedelta(hours=24)
+        expanded_end = window_end + pd.Timedelta(hours=24)
+        exp_mask = (series_df.index >= expanded_start) & (series_df.index <= expanded_end)
+        window_full = series_df.loc[exp_mask]
+        window_data = window_full["close"] if not window_full.empty else pd.Series(dtype=float)
+        expanded_window = not window_data.empty
+
     if window_data.empty:
         return FinanceSeriesWindowStats(
             swing_id=swing.swing_id,
@@ -93,16 +104,22 @@ def compute_window_stats(
         int((window_end - window_start).total_seconds() / 3600),  # hourly buckets
     )
     missing_pct = max(0.0, (n_expected - n_window) / n_expected)
+    dq_notes: list[str] = []
+    if expanded_window:
+        dq_notes.append("Window expanded ±24h — no equity data in original window (off-hours)")
 
     # Build FinanceTimeSeries from window slice
     ts = _build_time_series(window_full)
 
-    # Benchmark returns over same window
+    # Benchmark returns over same window (use benchmark's own index — not series_df's mask)
     bm_returns: list[float] = []
     if benchmark_df is not None and not benchmark_df.empty:
-        bm_window = benchmark_df.loc[window_mask, "close"] if window_mask.any() else pd.Series(dtype=float)
-        if not bm_window.empty:
-            bm_returns = bm_window.pct_change().fillna(0).round(6).tolist()
+        bm_idx = window_full.index  # reuse the already-sliced index range
+        if not bm_idx.empty:
+            bm_mask = (benchmark_df.index >= bm_idx[0]) & (benchmark_df.index <= bm_idx[-1])
+            bm_window = benchmark_df.loc[bm_mask, "close"]
+            if not bm_window.empty:
+                bm_returns = bm_window.pct_change().fillna(0).round(6).tolist()
 
     # Market cap (live call — gracefully returns None on failure)
     ticker_info = fetch_ticker_info(ticker)
@@ -129,7 +146,7 @@ def compute_window_stats(
         best_lag_hours=round(best_lag_hours, 1) if best_lag_hours is not None else None,
         benchmark_ticker=benchmark_ticker,
         benchmark_returns=bm_returns,
-        data_quality=DataQuality(missing_pct=round(missing_pct, 3)),
+        data_quality=DataQuality(missing_pct=round(missing_pct, 3), notes=dq_notes),
     )
 
 

@@ -11,6 +11,30 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
+# LLM Instrument Selection models
+# ---------------------------------------------------------------------------
+
+class InstrumentPrediction(BaseModel):
+    """LLM-predicted instrument for a Polymarket market."""
+    ticker: str = Field(..., description="Exchange ticker, e.g. 'AAPL', '^GSPC', 'SPY'")
+    company_name: str = Field("", description="Full company/index name")
+    instrument_type: str = Field("stock", description="'stock', 'etf', or 'index'")
+    predicted_direction: str = Field(
+        ..., description="'up' or 'down' — asset direction when Polymarket YES rises"
+    )
+    confidence: int = Field(..., description="LLM confidence 1–100")
+    rationale: str = Field("", description="One-sentence explanation")
+
+
+class InstrumentSelection(BaseModel):
+    """LLM-selected instruments for a single Polymarket market."""
+    market_id: str
+    market_question: str
+    instruments: list[InstrumentPrediction] = Field(default_factory=list)
+    selection_rationale: str = Field("", description="Overall selection rationale")
+
+
+# ---------------------------------------------------------------------------
 # Default series (yfinance tickers)
 # ---------------------------------------------------------------------------
 
@@ -141,3 +165,12 @@ class FinanceSeriesWindowStats(BaseModel):
     )
 
     data_quality: DataQuality = Field(default_factory=DataQuality)
+
+    # LLM instrument selection metadata
+    llm_confidence: int | None = Field(
+        None, description="LLM confidence score 1–100 for this ticker's relevance"
+    )
+    llm_predicted_direction: str | None = Field(
+        None, description="'up' or 'down' — LLM-predicted direction when Polymarket YES rises"
+    )
+    llm_company_name: str | None = Field(None, description="LLM-provided company/index name")

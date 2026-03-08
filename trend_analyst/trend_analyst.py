@@ -269,6 +269,10 @@ def analyze_pair(
     poly_prices_arr = np.array(aligned["poly_prices"], dtype=np.float64)
     fin_returns_arr = np.array(aligned["fin_returns"], dtype=np.float64)
     poly_changes = np.diff(poly_prices_arr)  # length N-1, aligned with fin_returns
+    # Ensure equal lengths (off-by-one can occur when proxy mode returns N returns for N prices)
+    min_len = min(len(poly_changes), len(fin_returns_arr))
+    poly_changes = poly_changes[:min_len]
+    fin_returns_arr = fin_returns_arr[:min_len]
 
     # ── Run selected tests ────────────────────────────────────────────────
     correlation = None

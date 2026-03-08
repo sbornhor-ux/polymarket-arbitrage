@@ -42,11 +42,15 @@ def classify_relevance(score: float) -> str:
 # ---------------------------------------------------------------------------
 
 _CATEGORY_BASE: dict[str, float] = {
-    "fed / monetary policy": 0.90,
-    "geopolitics": 0.65,
-    "us politics": 0.50,
-    "social / other": 0.15,
-    "sports / excluded": 0.05,
+    "fed / monetary policy":      0.90,
+    "earnings / corporate events": 0.82,
+    "m&a / ipo":                  0.78,
+    "financial markets":          0.65,
+    "economics / macro":          0.70,
+    "geopolitics":                0.65,
+    "us politics":                0.50,
+    "social / other":             0.15,
+    "sports / excluded":          0.05,
 }
 
 _DEFAULT_BASE = 0.40  # uncategorized / unknown
@@ -72,6 +76,20 @@ _BOOSTS: list[tuple[str, float, str]] = [
         0.25,
         "tariff/trade keywords",
     ),
+    # Earnings / corporate events
+    (
+        r"\b(earnings|eps|revenue|quarterly results|profit|guidance|dividend"
+        r"|stock split|share repurchase|buyback|analyst upgrade|price target)\b",
+        0.25,
+        "earnings/corporate keywords",
+    ),
+    # M&A / IPO
+    (
+        r"\b(merger|acquisition|acquire|takeover|buyout|ipo|initial public offering"
+        r"|go public|spac|spin.?off|divestiture|antitrust|tender offer)\b",
+        0.25,
+        "M&A/IPO keywords",
+    ),
     # Energy / commodities
     (
         r"\b(oil|crude|opec|energy|natural gas|strait of hormuz|lng)\b",
@@ -84,8 +102,6 @@ _BOOSTS: list[tuple[str, float, str]] = [
         0.20,
         "currency/FX keywords",
     ),
-    # Crypto
-    (r"\b(bitcoin|btc|ethereum|crypto)\b", 0.15, "crypto keywords"),
     # Equity / credit / macro
     (
         r"\b(stock market|s&p|recession|debt ceiling|yield|treasury bond"
@@ -111,10 +127,18 @@ _PENALTIES: list[tuple[str, float, str]] = [
         -0.30,
         "sports keywords",
     ),
+    # Crypto — excluded from scope (pure crypto markets, not macro crypto)
+    (
+        r"\b(bitcoin|btc|ethereum|eth|solana|dogecoin|ripple|xrp|cardano"
+        r"|nft|defi|altcoin|memecoin|stablecoin|blockchain wallet|airdrop)\b",
+        -0.35,
+        "crypto-specific keywords",
+    ),
     # Social / celebrity / entertainment
     (
-        r"\b(kardashian|tweet|tweets|retweet|jesus christ|aliens exist|pete hegseth ban)\b",
-        -0.25,
+        r"\b(kardashian|tweet|tweets|retweet|jesus christ|aliens exist|pete hegseth ban"
+        r"|reality tv|celebrity|award show|oscars|grammy|grammy award)\b",
+        -0.30,
         "social/celebrity keywords",
     ),
     # Long-horizon 2028 political races — minimal near-term market impact

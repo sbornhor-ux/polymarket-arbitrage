@@ -197,23 +197,23 @@ def export_csv(db_path: Path) -> Path:
 # Step 3 — Finance Agent (Polygon.io)
 # ---------------------------------------------------------------------------
 def run_finance_agent(csv_path: Path) -> Path:
-    log.info("Step 3 — Running Finance Agent (Polygon.io)...")
+    log.info("Step 3 — Running Finance Agent (Polygon.io) + LLM Instrument Selection...")
     sys.path.insert(0, str(ROOT))
 
     from polymarket_agent.loader import load_from_csv
     from polymarket_agent.normalizer import normalize_market
     from polymarket_agent.resampler import resample_to_5m
     from polymarket_agent.swing_detector import detect_swings
-    from polymarket_agent.relevance_screener import (
-        classify_relevance, HIGH_RELEVANCE_THRESHOLD, MEDIUM_RELEVANCE_THRESHOLD
-    )
+    from polymarket_agent.relevance_screener import classify_relevance
     from finance_agent import get_window_stats
+    from instrument_selector import select_instruments
 
     raw_markets = load_from_csv(str(csv_path))
     log.info(f"  Loaded {len(raw_markets)} markets from CSV")
 
     snapshots = []
     all_stats = []
+    all_selections = []
     skipped = 0
 
     for i, raw in enumerate(raw_markets):
@@ -234,10 +234,41 @@ def run_finance_agent(csv_path: Path) -> Path:
             log.info(f"  [{i+1}/{len(raw_markets)}] {snap.market_question[:60]} "
                      f"(rel={rel_score:.2f}, swings={len(snap.swings)})")
 
+            # Step 3a: LLM selects instruments for this market
+            selection = select_instruments(
+                market_question=snap.market_question,
+                swings=snap.swings,
+                market_id=snap.market_id,
+            )
+            all_selections.append(selection.model_dump())
+
+            # Step 3b: Use LLM-selected tickers; fall back to DEFAULT_SERIES if none validated
+            selected_tickers = [p.ticker for p in selection.instruments] or None
+            if selected_tickers:
+                log.info(f"    LLM selected: {selected_tickers}")
+            else:
+                log.info(f"    LLM returned no valid tickers — using default series")
+
+            # Build a metadata lookup keyed by ticker
+            llm_meta = {
+                p.ticker: (p.confidence, p.predicted_direction, p.company_name)
+                for p in selection.instruments
+            }
+
             stats = get_window_stats(
                 swing_events=snap.swings,
                 market_id=snap.market_id,
+                series=selected_tickers,
             )
+
+            # Attach LLM metadata to each stat record
+            for stat in stats:
+                if stat.series_id in llm_meta:
+                    conf, direction, name = llm_meta[stat.series_id]
+                    stat.llm_confidence = conf
+                    stat.llm_predicted_direction = direction
+                    stat.llm_company_name = name
+
             all_stats.extend(stats)
             snapshots.append(snap)
 
@@ -247,7 +278,7 @@ def run_finance_agent(csv_path: Path) -> Path:
             continue
 
     log.info(f"  Processed {len(snapshots)} markets, {skipped} skipped (low relevance/no swings)")
-    log.info(f"  Generated {len(all_stats)} finance data points")
+    log.info(f"  Generated {len(all_stats)} finance data points across {len(all_selections)} selections")
 
     # Serialize to Format D JSON (compatible with Trend Analyst financial_adapter)
     output = {
@@ -255,11 +286,12 @@ def run_finance_agent(csv_path: Path) -> Path:
         'source_csv': str(csv_path),
         'markets': [s.model_dump() for s in snapshots],
         'finance_stats': [s.model_dump() for s in all_stats],
+        'instrument_selections': all_selections,
     }
     with open(PIPELINE_PATH, 'w', encoding='utf-8') as f:
         json.dump(output, f, indent=2, default=str)
 
-    log.info(f"  Saved pipeline → {PIPELINE_PATH.name}")
+    log.info(f"  Saved pipeline -> {PIPELINE_PATH.name}")
     return PIPELINE_PATH
 
 

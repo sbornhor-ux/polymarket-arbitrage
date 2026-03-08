@@ -16,7 +16,7 @@ Usage (from orchestrator):
 
 from finance_agent.fetcher import fetch_series
 from finance_agent.stats import compute_window_stats
-from finance_agent.models import FinanceSeriesWindowStats, DEFAULT_SERIES
+from finance_agent.models import FinanceSeriesWindowStats, InstrumentSelection, DEFAULT_SERIES
 from polymarket_agent.models import SwingEvent
 
 
@@ -77,4 +77,4 @@ def get_window_stats(
     return all_stats
 
 
-__all__ = ["get_window_stats", "FinanceSeriesWindowStats", "DEFAULT_SERIES"]
+__all__ = ["get_window_stats", "FinanceSeriesWindowStats", "InstrumentSelection", "DEFAULT_SERIES"]
