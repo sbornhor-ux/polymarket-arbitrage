@@ -52,6 +52,20 @@ SELECTION PRIORITY:
 4. If no instrument has a plausible direct connection, still return your best guess but assign \
    very low confidence (5–25) and say so explicitly in the rationale.
 
+ALWAYS return 2–3 instruments unless the market is a pure celebrity/entertainment question with \
+absolutely no financial connection. One instrument is rarely enough — look harder for the 2nd and 3rd.
+
+SPECIFIC GUIDANCE BY MARKET TYPE:
+- Federal Reserve / central bank appointments (Fed Chair, FOMC, monetary policy): ALWAYS include \
+  XLF (financial sector ETF) AND at least one major bank stock (JPM, BAC, GS, or C). Optionally \
+  add TLT or IEF if the appointee has known views on interest rates.
+- Treasury Secretary / fiscal policy appointments: Include XLF, SPY, and TLT (government bonds).
+- Military / geopolitical events (Iran, NATO, strikes): LMT, NOC, or RTX (defense); XOM or CVX \
+  (oil) if the region is an oil producer; IEF or GLD as safe-haven.
+- Political election markets (US candidates): SPY is acceptable as a macro proxy, but also include \
+  a sector ETF that the candidate's platform most directly affects (e.g. clean energy for Democrats \
+  → ICLN; deregulation → XLF; healthcare policy → XLV).
+
 CONFIDENCE CALIBRATION — use the FULL range 1–100, not just 60–90:
 - 90–100: Company is literally named in the question, OR the outcome directly determines this \
   instrument's price (e.g. Fed rate decision → TLT/IEF directly priced by rate levels).

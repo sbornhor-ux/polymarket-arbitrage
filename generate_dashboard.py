@@ -39,6 +39,46 @@ def _composite_score(stat_score: float, llm_conf: int | None, pearson_r: float |
     return round(0.40 * c + 0.35 * s + 0.25 * r, 4)
 
 
+def _parse_market_summaries(report_md: str) -> dict[str, str]:
+    """Extract per-market summaries from the 'Market Signal Summaries' section."""
+    summaries: dict[str, str] = {}
+    lines = report_md.splitlines()
+    in_section = False
+    current_q: str | None = None
+    current_lines: list[str] = []
+
+    for line in lines:
+        if '## ' in line and 'Market Signal Summaries' in line:
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith('## '):
+                if current_q and current_lines:
+                    summaries[current_q] = ' '.join(current_lines).strip()
+                break
+            elif line.startswith('### '):
+                if current_q and current_lines:
+                    summaries[current_q] = ' '.join(current_lines).strip()
+                current_q = line[4:].strip()
+                current_lines = []
+            elif current_q and line.strip():
+                current_lines.append(line.strip())
+
+    if in_section and current_q and current_lines:
+        summaries[current_q] = ' '.join(current_lines).strip()
+
+    return summaries
+
+
+def _match_summary(question: str, summaries: dict[str, str]) -> str:
+    """Fuzzy-match a market question to a summary entry (first 50 chars)."""
+    key = question.strip()[:50].lower()
+    for q, text in summaries.items():
+        if key in q.lower() or q.lower()[:50] in key:
+            return text
+    return ''
+
+
 def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
     # CSV → market metadata keyed by market_id
     meta = {}
@@ -151,8 +191,10 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
     # Investment report markdown
     report_md  = ''
     report_mid = ''
+    market_summaries: dict[str, str] = {}
     if report_path and report_path.exists():
         report_md = report_path.read_text(encoding='utf-8')
+        market_summaries = _parse_market_summaries(report_md)
         for line in report_md.splitlines():
             if line.startswith('# '):
                 title = line[2:].strip().lower()
@@ -161,6 +203,10 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
                         report_mid = m['id']
                         break
                 break
+
+    # Attach per-market summaries
+    for m in market_list:
+        m['market_summary'] = _match_summary(m['question'], market_summaries)
 
     # Filter out markets that have already closed
     today = date.today().isoformat()
@@ -679,6 +725,16 @@ function renderDetail(m) {
             </details>
           ` : ""}
         </div>
+      </div>
+    `;
+  }
+
+  /* Per-market signal summary */
+  if (m.market_summary) {
+    html += `
+      <div class="section">
+        <div class="section-title">Market Signal Summary</div>
+        <div class="summary-card" style="font-size:13px;line-height:1.6;color:#c9d1d9;">${esc(m.market_summary)}</div>
       </div>
     `;
   }
