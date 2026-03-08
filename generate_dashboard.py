@@ -541,7 +541,6 @@ body {
 <script>
 const MARKETS   = __MARKETS__;
 const REPORT_MD = __REPORT__;
-const REPORT_MID = __REPORT_MID__;
 
 function esc(s) {
   if (s == null) return "";
@@ -668,7 +667,6 @@ function renderDetail(m) {
   const polyUrl  = slug ? "https://polymarket.com/event/" + slug : "https://polymarket.com";
   const topTicker = m.best_ticker || "";
   const best     = m.pairs && m.pairs[0];
-  const hasReport = (m.id === REPORT_MID && REPORT_MD);
 
   let html = `
     <div class="detail-header">
@@ -867,9 +865,6 @@ function renderDetail(m) {
 
   /* Investment report — shown on all markets when available */
   if (REPORT_MD) {
-    // If this market has its own section in the report, pre-select that heading anchor
-    const mq = m.question || "";
-    const anchor = mq.trim().slice(0, 50).toLowerCase().replace(/[^a-z0-9]+/g, "-");
     html += `
       <div class="section">
         <div class="section-title">Investment Analysis Report</div>
@@ -938,7 +933,6 @@ def build_html(market_list, report_md, report_mid, analysis_ts) -> str:
     html = HTML_TEMPLATE
     html = html.replace('__MARKETS__',   json.dumps(market_list,  ensure_ascii=False, default=str))
     html = html.replace('__REPORT__',    json.dumps(report_md,    ensure_ascii=False))
-    html = html.replace('__REPORT_MID__',json.dumps(report_mid,   ensure_ascii=False))
     html = html.replace('__N_MARKETS__', str(n_markets))
     html = html.replace('__N_PAIRS__',   str(n_pairs))
     html = html.replace('__TS__',        ts_str)
