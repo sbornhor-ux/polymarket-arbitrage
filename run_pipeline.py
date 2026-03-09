@@ -224,20 +224,12 @@ def run_finance_agent(csv_path: Path) -> Path:
 
     for i, raw in enumerate(raw_markets):
         try:
-            # Fetch the 72 hours of 15-minute price history ending at first_seen,
-            # so we capture what was happening when the swing was first detected.
-            meta = raw.get('metadata', {})
-            clob_token_ids_str = meta.get('clob_token_ids', '') or ''
+            # Fetch the 72 hours of 15-minute price history ending at now
+            # (the moment the pipeline runs and detects the swing).
+            clob_token_ids_str = raw.get('metadata', {}).get('clob_token_ids', '') or ''
             yes_token_id = extract_yes_token_id(clob_token_ids_str)
-            first_seen_str = meta.get('first_seen', '') or ''
-            try:
-                end_utc = datetime.fromisoformat(first_seen_str) if first_seen_str else None
-                if end_utc and end_utc.tzinfo is None:
-                    end_utc = end_utc.replace(tzinfo=timezone.utc)
-            except Exception:
-                end_utc = None
             if yes_token_id:
-                fresh_history = fetch_price_history(yes_token_id, lookback_hours=72, end_utc=end_utc)
+                fresh_history = fetch_price_history(yes_token_id, lookback_hours=72)
                 if fresh_history:
                     raw['history'] = fresh_history
                     clob_fetched += 1
