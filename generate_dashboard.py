@@ -615,7 +615,7 @@ function signalBanner(discovery, ticker) {
     <div class="signal-banner sig-none">
       <div class="signal-icon">&#x2014;</div>
       <div>
-        <div class="signal-label">No clear price discovery signal</div>
+        <div class="signal-label">No clear discovery direction in historical movement</div>
         <div class="signal-desc">Insufficient data or no significant relationship detected
         between this market and ${t}.</div>
       </div>
