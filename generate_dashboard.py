@@ -175,8 +175,9 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
             'llm_direction':     lm.get('llm_predicted_direction', ''),
             'llm_company_name':  lm.get('llm_company_name', ''),
             'llm_rationale':     lm.get('llm_rationale', ''),
-            'llm_interp':        llc.get('interpretation', ''),
-            'divergence_interp': div.get('interpretation', '') if div.get('signal_direction', 'no_signal') != 'no_signal' else '',
+            'llm_interp':           llc.get('interpretation', ''),
+            'divergence_direction': div.get('signal_direction', 'no_signal'),
+            'divergence_interp':    div.get('interpretation', '') if div.get('signal_direction', 'no_signal') != 'no_signal' else '',
         })
 
     for m in markets.values():
@@ -831,7 +832,7 @@ function renderDetail(m) {
           <td class="expand-cell" colspan="8">
             ${p.llm_rationale ? `<div class="expand-rationale"><strong style="color:#58a6ff;">Why selected:</strong> ${esc(p.llm_rationale)}</div>` : ""}
             <div class="expand-stats">
-              <span class="expand-stat-item">Pearson r: <strong>${pr}</strong></span>
+              <span class="expand-stat-item">Divergence: <strong>${{no_signal:"None",underreaction:"Underreaction",overreaction:"Overreaction"}[p.divergence_direction] || p.divergence_direction || "—"}</strong></span>
               <span class="expand-stat-item">n obs: <strong>${p.n_obs}</strong></span>
               <span class="expand-stat-item">Stat correlation: <strong>${sc}/100</strong></span>
               <span class="expand-stat-item">Composite: <strong>${comp}/100</strong></span>
