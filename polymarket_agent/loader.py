@@ -287,6 +287,9 @@ def _csv_row_to_raw(row: Any) -> dict[str, Any] | None:
     clob_token_ids_raw = row.get("clob_token_ids", "")
     clob_token_ids = "" if pd.isna(clob_token_ids_raw) else str(clob_token_ids_raw)
 
+    first_seen_raw = row.get("first_seen", "")
+    first_seen = "" if pd.isna(first_seen_raw) else str(first_seen_raw)
+
     metadata: dict[str, Any] = {
         "condition_id": market_id,
         "question": question,
@@ -297,6 +300,7 @@ def _csv_row_to_raw(row: Any) -> dict[str, Any] | None:
         "current_liquidity": None if pd.isna(liquidity_raw) else float(liquidity_raw),
         "odds_swing_pct": None if pd.isna(row.get("one_month_price_change", float("nan"))) else float(row["one_month_price_change"]),
         "clob_token_ids": clob_token_ids,
+        "first_seen": first_seen,
     }
 
     return {

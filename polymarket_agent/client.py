@@ -29,20 +29,24 @@ def _utc_now() -> datetime:
 def fetch_price_history(
     token_id: str,
     lookback_hours: int = 72,
+    end_utc: datetime | None = None,
 ) -> list[dict]:
     """
-    Fetch recent price history for a YES token directly from the CLOB API.
+    Fetch price history for a YES token directly from the CLOB API.
 
     Args:
-        token_id: The Polymarket YES token ID (hex string).
-        lookback_hours: How many hours back to fetch (default 72).
+        token_id: The Polymarket YES token ID (decimal string).
+        lookback_hours: How many hours back from end_utc to fetch (default 72).
+        end_utc: End of the fetch window (default: now). Pass first_seen to
+                 get the 72 hours leading up to when the swing was detected.
 
     Returns:
         List of {"t": unix_ts, "p": float} dicts ordered oldest-first.
         Returns empty list on any error.
     """
-    end_ts = int(_utc_now().timestamp())
-    start_ts = int((_utc_now() - timedelta(hours=lookback_hours)).timestamp())
+    end = end_utc if end_utc is not None else _utc_now()
+    end_ts = int(end.timestamp())
+    start_ts = int((end - timedelta(hours=lookback_hours)).timestamp())
     try:
         with httpx.Client(base_url=_BASE, timeout=_TIMEOUT) as client:
             resp = client.get(
