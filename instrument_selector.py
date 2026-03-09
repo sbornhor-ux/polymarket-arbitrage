@@ -3,9 +3,11 @@ instrument_selector.py
 ======================
 LLM-driven financial instrument selection for Polymarket markets.
 
-For each market question with detected swings, calls OpenAI to select up to 3
-financial instruments (ideally 2 US stocks + 1 index/ETF), predict the directional
-relationship with the Polymarket outcome, and assign a confidence score.
+Two-step approach:
+  Step 1 (gpt-4o-mini): Brainstorm 7 candidate instruments broadly.
+  Step 2 (gpt-4o):      Critically evaluate the 7 candidates, select the best 2–3,
+                         and write a 3-sentence justification for each based on the
+                         company's business model and specific exposure to the outcome.
 
 All selected tickers are validated against Polygon.io before returning.
 """
@@ -25,7 +27,8 @@ from polymarket_agent.models import SwingEvent
 
 log = logging.getLogger(__name__)
 
-_OPENAI_MODEL = "gpt-4o-mini"
+_MODEL_STEP1 = "gpt-4o-mini"
+_MODEL_STEP2 = "gpt-4o-mini"
 
 # Tickers that are known-valid index/macro instruments (no Polygon equity lookup needed)
 _KNOWN_VALID: set[str] = {
@@ -37,63 +40,73 @@ _KNOWN_VALID: set[str] = {
     "VIXY",
 }
 
-_SYSTEM_PROMPT = """\
-You are a senior equity analyst specializing in event-driven trading. Your job is to identify \
-which US-listed stocks and ETFs are most meaningfully affected by specific prediction market outcomes, \
-and to be brutally honest about how confident you actually are in each connection.
+# ---------------------------------------------------------------------------
+# Step 1 prompt — broad brainstorm, 7 candidates
+# ---------------------------------------------------------------------------
 
-Given a Polymarket prediction market question, select up to 3 financial instruments that a \
-rational hedge fund manager would actually consider trading based on this market's outcome.
+_STEP1_SYSTEM_PROMPT = """\
+You are a senior equity analyst brainstorming financial instruments that could be correlated \
+with a Polymarket prediction market outcome.
 
-SELECTION PRIORITY:
-1. If a specific company is named in the question, pick that company's stock first (highest confidence).
-2. Pick 1–2 other stocks/ETFs of companies with clear, direct economic exposure to the outcome.
-3. Add 1 sector ETF only if a meaningful sector rotation would follow the outcome.
-4. If no instrument has a plausible direct connection, still return your best guess but assign \
-   very low confidence (5–25) and say so explicitly in the rationale.
+Your task: generate exactly 7 candidate US-listed stocks or ETFs that a hedge fund manager \
+might consider trading based on the market question's outcome. Cast a wide net — include both \
+obvious first-order plays and less obvious second-order candidates.
 
-ALWAYS return 2–3 instruments unless the market is a pure celebrity/entertainment question with \
-absolutely no financial connection. One instrument is rarely enough — look harder for the 2nd and 3rd.
+COVERAGE RULES:
+- Always include at least one sector ETF relevant to the market theme.
+- If a specific company is named in the question, include its stock.
+- Include a mix: individual stocks, sector ETFs, and (if relevant) macro ETFs like TLT, GLD, USO.
+- For Fed/central bank questions: include XLF and a major bank stock (JPM, BAC, GS, or C).
+- For geopolitical/military questions: include defense (LMT, NOC, RTX) and energy (XOM, CVX).
+- For political appointment questions: think broadly — financials, bonds, affected sectors.
+- Do NOT pre-screen quality — the goal is breadth, not precision. Even weak candidates are useful.
 
-SPECIFIC GUIDANCE BY MARKET TYPE:
-- Federal Reserve / central bank appointments (Fed Chair, FOMC, monetary policy): ALWAYS include \
-  XLF (financial sector ETF) AND at least one major bank stock (JPM, BAC, GS, or C). Optionally \
-  add TLT or IEF if the appointee has known views on interest rates.
-- Treasury Secretary / fiscal policy appointments: Include XLF, SPY, and TLT (government bonds).
-- Military / geopolitical events (Iran, NATO, strikes): LMT, NOC, or RTX (defense); XOM or CVX \
-  (oil) if the region is an oil producer; IEF or GLD as safe-haven.
-- Political election markets (US candidates): SPY is acceptable as a macro proxy, but also include \
-  a sector ETF that the candidate's platform most directly affects (e.g. clean energy for Democrats \
-  → ICLN; deregulation → XLF; healthcare policy → XLV).
+Use exact US exchange ticker symbols only. No crypto. No hallucinated tickers.
 
-CONFIDENCE CALIBRATION — use the FULL range 1–100, not just 60–90:
-- 90–100: Company is literally named in the question, OR the outcome directly determines this \
-  instrument's price (e.g. Fed rate decision → TLT/IEF directly priced by rate levels).
-- 70–89: Strong direct exposure — the company's core revenue is clearly and materially affected \
-  (e.g. Strait of Hormuz closure → XOM, CVX lose access to key supply routes).
-- 50–69: Solid sector-level exposure — the outcome affects a whole sector this stock dominates \
-  (e.g. Iran military escalation → defense sector ETF XLI).
-- 30–49: Indirect or macro exposure — second-order effects; a plausible but non-obvious link \
-  (e.g. US political appointment → broad financials XLF with no named company).
-- 10–29: Tenuous connection — you can construct a story but most traders would not hedge here \
-  (e.g. a geopolitical event → a tech stock only loosely exposed to the region).
-- 1–9: Little to no rational financial connection. You are essentially guessing. Assign these \
-  scores for celebrity, sports, entertainment, or political questions with no clear market impact \
-  (e.g. "Will Tom Brady win the Republican nomination?" → any stock is a stretch; score 5–8 max).
+Return ONLY valid JSON (no markdown fences):
+{
+  "candidates": [
+    {"ticker": "JPM", "company_name": "JPMorgan Chase & Co.", "instrument_type": "stock", "one_line": "Large bank directly affected by interest rate policy changes."},
+    ...7 total...
+  ]
+}
+"""
+
+# ---------------------------------------------------------------------------
+# Step 2 prompt — critical evaluation, select best 2–3 with full justification
+# ---------------------------------------------------------------------------
+
+_STEP2_SYSTEM_PROMPT = """\
+You are a senior equity analyst critically evaluating a shortlist of financial instruments \
+for relevance to a specific Polymarket prediction market outcome.
+
+You will receive a market question and 7 candidate instruments. Your job is to:
+1. Reason carefully about each company's business model, revenue sources, and specific \
+   exposure to the market outcome — drawing on what you know about each company.
+2. Select the 2–3 instruments with the strongest, most direct connection to the outcome.
+3. Write a detailed 3-sentence rationale for each selected instrument covering:
+   - Sentence 1: What the company does and its core business/revenue model.
+   - Sentence 2: Exactly how and why this market outcome specifically affects this company.
+   - Sentence 3: An honest assessment of the connection strength and any caveats.
+4. Assign alignment and a calibrated confidence score.
+
+CONFIDENCE CALIBRATION — use the FULL range 1–100:
+- 90–100: Company is literally named in the question, OR outcome directly determines price.
+- 70–89: Strong direct exposure — company's core revenue clearly and materially affected.
+- 50–69: Solid sector-level exposure — outcome affects the whole sector this instrument tracks.
+- 30–49: Indirect or macro exposure — second-order effects; plausible but non-obvious.
+- 10–29: Tenuous — you can construct a story but most traders would not hedge here.
+- 1–9: Little to no rational financial connection; essentially guessing.
 
 CRITICAL RULES:
-- Do NOT cluster scores in 60–80. Use the full range. A score of 15 or 85 is often more \
-  accurate than 65.
-- Ask yourself: "Would a quant fund actually delta-hedge a Polymarket position with this \
-  instrument?" If clearly not, confidence must be below 30.
-- Use exact US exchange ticker symbols (AAPL, JPM, XOM, SPY, XLF). No crypto tickers.
-- Do NOT hallucinate tickers — only use real, actively traded US securities.
-- alignment is "with" if the instrument price RISES when Polymarket YES probability rises; \
-  "against" if it FALLS when YES probability rises.
-- Write a specific, honest rationale. If confidence is low, explicitly state why the connection \
-  is weak or speculative.
+- Use the FULL range. Do NOT cluster scores in 60–80.
+- Ask: "Would a quant fund actually delta-hedge a Polymarket position with this instrument?"
+- alignment is "with" if price RISES when YES probability rises; "against" if it FALLS.
+- Reject weak candidates — it is better to return 2 strong instruments than 3 weak ones.
+- Be specific in rationales. Generic phrases like "broadly exposed to macro conditions" are \
+  not acceptable — explain the specific mechanism.
 
-Return ONLY valid JSON (no markdown fences) in this exact structure:
+Return ONLY valid JSON (no markdown fences):
 {
   "instruments": [
     {
@@ -101,42 +114,94 @@ Return ONLY valid JSON (no markdown fences) in this exact structure:
       "company_name": "JPMorgan Chase & Co.",
       "instrument_type": "stock",
       "alignment": "with",
-      "confidence": 35,
-      "rationale": "A dovish Fed nominee could compress net interest margins for banks; \
-JPM has some exposure but no specific company is named in the question and the link \
-is indirect — most rate sensitivity is already priced in."
+      "confidence": 72,
+      "rationale": "JPMorgan Chase is the largest US bank by assets, generating the majority of its revenue from net interest income, investment banking fees, and trading operations across global capital markets. A hawkish Fed Chair appointment would sustain elevated interest rates, directly expanding JPM's net interest margin on its $3 trillion loan book and boosting returns on its massive fixed-income portfolio. While the bank has some offsetting exposure through slower loan demand at higher rates, the net effect historically favors JPM in rising-rate environments, making this a high-conviction play."
     }
   ],
-  "selection_rationale": "Overall reasoning including any caveats about weak connections."
+  "selection_rationale": "Brief overall summary of why these instruments were chosen over the others."
 }
 """
 
 
-def _call_openai(question: str) -> dict | None:
-    """Call OpenAI and return parsed JSON dict, or None on failure."""
+def _get_openai_client() -> OpenAI | None:
+    """Return an OpenAI client, or None if API key is missing."""
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         log.warning("[instrument_selector] OPENAI_API_KEY not set — skipping LLM selection")
         return None
+    return OpenAI(api_key=api_key)
 
-    client = OpenAI(api_key=api_key)
+
+def _parse_json_response(raw: str) -> dict | None:
+    """Strip markdown fences and parse JSON, returning None on failure."""
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
     try:
-        response = client.chat.completions.create(
-            model=_OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": f"Market question: {question}"},
-            ],
-            temperature=0.2,
-            max_tokens=600,
-        )
-        raw = response.choices[0].message.content.strip()
-        # Strip markdown fences if present
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
         return json.loads(raw)
     except Exception as e:
-        log.warning(f"[instrument_selector] OpenAI call failed: {e}")
+        log.warning(f"[instrument_selector] JSON parse failed: {e}")
+        return None
+
+
+def _step1_generate_candidates(client: OpenAI, question: str) -> list[dict]:
+    """
+    Step 1: Brainstorm 7 candidate instruments broadly using gpt-4o-mini.
+
+    Returns a list of candidate dicts with keys: ticker, company_name,
+    instrument_type, one_line. Returns empty list on failure.
+    """
+    try:
+        response = client.chat.completions.create(
+            model=_MODEL_STEP1,
+            messages=[
+                {"role": "system", "content": _STEP1_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Market question: {question}"},
+            ],
+            temperature=0.4,
+            max_tokens=600,
+        )
+        result = _parse_json_response(response.choices[0].message.content)
+        if not result:
+            return []
+        candidates = result.get("candidates", [])
+        log.debug(
+            f"[instrument_selector] Step 1 candidates: "
+            f"{[c.get('ticker') for c in candidates]}"
+        )
+        return candidates
+    except Exception as e:
+        log.warning(f"[instrument_selector] Step 1 (brainstorm) failed: {e}")
+        return []
+
+
+def _step2_evaluate_candidates(
+    client: OpenAI, question: str, candidates: list[dict]
+) -> dict | None:
+    """
+    Step 2: Critically evaluate the 7 candidates and select the best 2–3 using gpt-4o.
+
+    Returns the parsed JSON dict with 'instruments' and 'selection_rationale' keys,
+    or None on failure.
+    """
+    candidates_text = json.dumps(candidates, indent=2)
+    user_msg = (
+        f"Market question: {question}\n\n"
+        f"Candidate instruments to evaluate:\n{candidates_text}"
+    )
+    try:
+        response = client.chat.completions.create(
+            model=_MODEL_STEP2,
+            messages=[
+                {"role": "system", "content": _STEP2_SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.1,
+            max_tokens=1200,
+        )
+        return _parse_json_response(response.choices[0].message.content)
+    except Exception as e:
+        log.warning(f"[instrument_selector] Step 2 (evaluation) failed: {e}")
         return None
 
 
@@ -165,7 +230,10 @@ def select_instruments(
     market_id: str = "",
 ) -> InstrumentSelection:
     """
-    Select up to 3 financial instruments for a Polymarket market via LLM.
+    Select up to 3 financial instruments for a Polymarket market via two-step LLM.
+
+    Step 1 (gpt-4o-mini): Brainstorm 7 broad candidates.
+    Step 2 (gpt-4o):      Evaluate candidates, select best 2–3 with 3-sentence justifications.
 
     Args:
         market_question: The Polymarket question text.
@@ -184,13 +252,33 @@ def select_instruments(
             selection_rationale="No swings detected — skipped instrument selection.",
         )
 
-    result = _call_openai(market_question)
-    if not result:
+    client = _get_openai_client()
+    if not client:
         return InstrumentSelection(
             market_id=market_id,
             market_question=market_question,
             instruments=[],
             selection_rationale="LLM unavailable.",
+        )
+
+    # Step 1: brainstorm 7 candidates
+    candidates = _step1_generate_candidates(client, market_question)
+    if not candidates:
+        return InstrumentSelection(
+            market_id=market_id,
+            market_question=market_question,
+            instruments=[],
+            selection_rationale="Step 1 (candidate generation) failed.",
+        )
+
+    # Step 2: evaluate and select best 2–3 with full justifications
+    result = _step2_evaluate_candidates(client, market_question, candidates)
+    if not result:
+        return InstrumentSelection(
+            market_id=market_id,
+            market_question=market_question,
+            instruments=[],
+            selection_rationale="Step 2 (candidate evaluation) failed.",
         )
 
     raw_instruments = result.get("instruments", [])
