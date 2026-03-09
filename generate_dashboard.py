@@ -630,10 +630,15 @@ function yahooUrl(ticker) {
 function renderFeed() {
   document.getElementById("feed").innerHTML = MARKETS.map(m => {
     const llmConf = m.best_llm_conf != null ? `<span class="badge conf-medium">${m.best_llm_conf} conf</span>` : "";
-    const divBadge = {
-      underreaction: `<span class="badge" style="background:#1a2e12;color:#3fb950;">⚡ Underreaction</span>`,
-      overreaction:  `<span class="badge" style="background:#2e1a1a;color:#f85149;">↓ Overreaction</span>`,
-    }[m.best_divergence] || "";
+    const divLabels = { underreaction: "⚡ Underreaction", overreaction: "↓ Overreaction" };
+    const divStyles = {
+      underreaction: "background:#1a2e12;color:#3fb950;",
+      overreaction:  "background:#2e1a1a;color:#f85149;",
+    };
+    const divBadges = (m.pairs || [])
+      .filter(p => p.divergence_direction && p.divergence_direction !== "no_signal")
+      .map(p => `<span class="badge" style="${divStyles[p.divergence_direction] || ""}" title="${esc(p.ticker)}">${divLabels[p.divergence_direction] || p.divergence_direction} (${esc(p.ticker)})</span>`)
+      .join("");
     return `
     <div class="market-card" id="card-${esc(m.id)}" onclick="selectMarket('${esc(m.id)}')">
       <div class="card-question">${esc(m.question)}</div>
@@ -641,7 +646,7 @@ function renderFeed() {
         <span class="badge cat-${catClass(m.category)}">${esc(m.category || "Unknown")}</span>
         <span class="badge conf-${m.best_confidence}">${m.best_confidence.toUpperCase()}</span>
         ${llmConf}
-        ${divBadge}
+        ${divBadges}
       </div>
       <div class="card-stats">
         <span class="card-price">${m.price != null ? m.price.toFixed(3) : "—"}</span>
