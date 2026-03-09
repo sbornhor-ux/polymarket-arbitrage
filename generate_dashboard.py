@@ -31,12 +31,11 @@ def find_latest(pattern: str) -> Path | None:
 
 
 def _composite_score(stat_score: float, llm_conf: int | None, pearson_r: float | None) -> float:
-    """Composite score blending statistical similarity, LLM confidence, and correlation."""
+    """Composite score blending statistical similarity and LLM relevance."""
     s = float(stat_score or 0.0)
     c = float(llm_conf or 0) / 100.0  # normalise to 0-1
-    r = abs(float(pearson_r or 0.0))  # absolute Pearson r (0-1)
-    # Weights: LLM confidence 40%, stat score 35%, |pearson r| 25%
-    return round(0.40 * c + 0.35 * s + 0.25 * r, 4)
+    # Weights: LLM relevance 40%, stat score 60%
+    return round(0.40 * c + 0.60 * s, 4)
 
 
 def _parse_market_summaries(report_md: str) -> dict[str, str]:
@@ -497,14 +496,14 @@ body {
     <dl>
       <div class="modal-term">
         <dt>Composite Score</dt>
-        <dd>Blended signal: 40% Confidence + 35% Stat Score + 25% |Pearson r|. Higher = stronger overall signal.</dd>
+        <dd>Blended signal: 40% LLM Relevance Score + 60% Statistical Correlation. Higher = stronger overall signal.</dd>
       </div>
       <div class="modal-term">
-        <dt>Stat Score</dt>
+        <dt>Statistical Correlation in Historical Movement</dt>
         <dd>Statistical similarity between Polymarket probability changes and financial returns, combining correlation, Granger causality, lead-lag CCF, event study, and volatility spillover tests. 0–1 scale.</dd>
       </div>
       <div class="modal-term">
-        <dt>Confidence</dt>
+        <dt>LLM Relevance Score</dt>
         <dd>LLM-assessed likelihood (1–100) that this financial instrument meaningfully responds to the Polymarket outcome. 90+ = directly named company or instrument. 10–29 = tenuous connection. Below 10 = essentially guessing.</dd>
       </div>
       <div class="modal-term">
@@ -694,7 +693,7 @@ function renderDetail(m) {
       ? `<span class="dir-${alignNorm}">${alignNorm === "with" ? "▲ With" : "▼ Against"}</span>`
       : "";
     const llmConf = best.llm_confidence != null
-      ? `<span class="badge conf-medium">Confidence: ${best.llm_confidence}/100</span>`
+      ? `<span class="badge conf-medium">LLM Relevance: ${best.llm_confidence}/100</span>`
       : "";
     const compScore = ((best.composite||0)*100).toFixed(1);
     const statScore = ((best.score||0)*100).toFixed(1);
@@ -710,7 +709,7 @@ function renderDetail(m) {
             </div>
             <div style="display:flex;gap:14px;font-size:12px;color:#8b949e;text-align:right;">
               <div><div style="color:#e6edf3;font-weight:600;">${compScore}</div><div>Composite</div></div>
-              <div><div style="color:#e6edf3;font-weight:600;">${statScore}</div><div>Stat Score</div></div>
+              <div><div style="color:#e6edf3;font-weight:600;">${statScore}</div><div>Stat Correlation</div></div>
               <div><div style="color:#8b949e;font-size:11px;">${best.n_obs} obs</div></div>
             </div>
           </div>
@@ -834,7 +833,7 @@ function renderDetail(m) {
             <div class="expand-stats">
               <span class="expand-stat-item">Pearson r: <strong>${pr}</strong></span>
               <span class="expand-stat-item">n obs: <strong>${p.n_obs}</strong></span>
-              <span class="expand-stat-item">Stat score: <strong>${sc}/100</strong></span>
+              <span class="expand-stat-item">Stat correlation: <strong>${sc}/100</strong></span>
               <span class="expand-stat-item">Composite: <strong>${comp}/100</strong></span>
             </div>
             ${p.summary ? `<div style="margin-top:8px;font-size:12px;color:#8b949e;line-height:1.5;font-style:italic;">${esc(p.summary)}</div>` : ""}
@@ -851,8 +850,8 @@ function renderDetail(m) {
         <table class="pairs-table">
           <thead><tr>
             <th>Ticker</th><th>Company / Instrument</th>
-            <th>Confidence</th><th>Alignment</th>
-            <th>Composite</th><th>Stat Score</th>
+            <th>LLM Relevance</th><th>Alignment</th>
+            <th>Composite</th><th>Stat Correlation</th>
             <th>Discovery</th><th></th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
