@@ -332,60 +332,66 @@ function discLabel(d) {
   return { cls:"disc-none", label: d };
 }
 
-function signalBanner(discovery, divergence, ticker) {
+function discoveryBanner(discovery, ticker) {
   const t = esc(ticker || "financial markets");
   if (discovery === "polymarket_leads") return `
     <div class="signal-banner sig-poly">
       <div class="signal-icon">&#x1F4C8;</div>
       <div>
-        <div class="signal-label">Polymarket leads — potential opportunity</div>
-        <div class="signal-desc">Polymarket priced this information <strong>before</strong> ${t} reacted.
-        If the financial market hasn't fully caught up, there may be a tradeable edge.</div>
+        <div class="signal-label">Polymarket leads historically</div>
+        <div class="signal-desc">Polymarket has historically priced this information <strong>before</strong> ${t} reacted — potential information edge.</div>
       </div>
     </div>`;
   if (discovery === "finance_leads") return `
     <div class="signal-banner sig-fin">
       <div class="signal-icon">&#x1F3DB;</div>
       <div>
-        <div class="signal-label">Financial markets lead — information already priced in</div>
-        <div class="signal-desc">${t} moved <strong>before</strong> Polymarket. Traditional markets
-        priced this event first — Polymarket odds may lag reality.</div>
+        <div class="signal-label">Financial market leads historically</div>
+        <div class="signal-desc">${t} has historically moved <strong>before</strong> Polymarket — traditional markets tend to price this event first.</div>
       </div>
     </div>`;
   if (discovery === "contemporaneous") return `
     <div class="signal-banner sig-both">
       <div class="signal-icon">&#x21C4;</div>
       <div>
-        <div class="signal-label">Simultaneous movement — markets in sync</div>
-        <div class="signal-desc">Polymarket and ${t} moved together at the same time.
-        Strong co-movement but no clear information advantage on either side.</div>
-      </div>
-    </div>`;
-  if (divergence === "underreaction") return `
-    <div class="signal-banner sig-under">
-      <div class="signal-icon">&#x26A1;</div>
-      <div>
-        <div class="signal-label">Underreaction detected — Polymarket may be lagging</div>
-        <div class="signal-desc">${t} has moved but Polymarket odds haven't fully followed.
-        This gap may represent a tradeable opportunity if the financial move is informative.</div>
-      </div>
-    </div>`;
-  if (divergence === "overreaction") return `
-    <div class="signal-banner sig-over">
-      <div class="signal-icon">&#x26A0;</div>
-      <div>
-        <div class="signal-label">Overreaction detected — Polymarket odds may be stretched</div>
-        <div class="signal-desc">Polymarket has moved more than ${t} would suggest.
-        Odds may be pricing in more than the financial market supports.</div>
+        <div class="signal-label">Simultaneous movement</div>
+        <div class="signal-desc">Polymarket and ${t} have historically moved together with no clear lead on either side.</div>
       </div>
     </div>`;
   return `
     <div class="signal-banner sig-none">
       <div class="signal-icon">&#x2014;</div>
       <div>
-        <div class="signal-label">No clear discovery direction in historical movement</div>
-        <div class="signal-desc">Insufficient data or no significant relationship detected
-        between this market and ${t}.</div>
+        <div class="signal-label">No clear price signal</div>
+        <div class="signal-desc">Insufficient data or no significant historical lead-lag relationship detected between this market and ${t}.</div>
+      </div>
+    </div>`;
+}
+
+function divergenceBanner(divergence, ticker) {
+  const t = esc(ticker || "financial markets");
+  if (divergence === "underreaction") return `
+    <div class="signal-banner sig-under">
+      <div class="signal-icon">&#x26A1;</div>
+      <div>
+        <div class="signal-label">Underreaction</div>
+        <div class="signal-desc">${t} has moved but Polymarket odds haven't fully followed — current gap may be a tradeable opportunity.</div>
+      </div>
+    </div>`;
+  if (divergence === "overreaction") return `
+    <div class="signal-banner sig-over">
+      <div class="signal-icon">&#x26A0;</div>
+      <div>
+        <div class="signal-label">Overreaction</div>
+        <div class="signal-desc">Polymarket has moved more than ${t} would suggest — odds may be pricing in more than financial markets support.</div>
+      </div>
+    </div>`;
+  return `
+    <div class="signal-banner sig-none">
+      <div class="signal-icon">&#x2014;</div>
+      <div>
+        <div class="signal-label">No clear divergence signal</div>
+        <div class="signal-desc">No significant current divergence detected between Polymarket odds and ${t}.</div>
       </div>
     </div>`;
 }
@@ -634,7 +640,7 @@ function renderDetail(m) {
   const bestDiscovery = best ? best.discovery : "";
   const bestDivergence = best ? best.divergence_direction : "";
   const bestTickerName = best ? best.ticker_name : "";
-  html = html.replace("__SIGNAL_BANNER__", signalBanner(bestDiscovery, bestDivergence, bestTickerName));
+  html = html.replace("__SIGNAL_BANNER__", discoveryBanner(bestDiscovery, bestTickerName) + divergenceBanner(bestDivergence, bestTickerName));
 
   html += "</div>"; // detail-body
   document.getElementById("detail").innerHTML = html;
