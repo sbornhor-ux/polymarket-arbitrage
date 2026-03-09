@@ -189,6 +189,7 @@ def load_data(trend_path: Path, csv_path: Path, report_path: Path | None):
         m['best_score']       = b.get('composite', 0.0)
         m['best_confidence']  = b.get('confidence', 'low')
         m['best_llm_conf']    = b.get('llm_confidence')
+        m['best_divergence']  = b.get('divergence_direction', 'no_signal')
 
     market_list = sorted(
         markets.values(),
@@ -629,6 +630,10 @@ function yahooUrl(ticker) {
 function renderFeed() {
   document.getElementById("feed").innerHTML = MARKETS.map(m => {
     const llmConf = m.best_llm_conf != null ? `<span class="badge conf-medium">${m.best_llm_conf} conf</span>` : "";
+    const divBadge = {
+      underreaction: `<span class="badge" style="background:#1a2e12;color:#3fb950;">⚡ Underreaction</span>`,
+      overreaction:  `<span class="badge" style="background:#2e1a1a;color:#f85149;">↓ Overreaction</span>`,
+    }[m.best_divergence] || "";
     return `
     <div class="market-card" id="card-${esc(m.id)}" onclick="selectMarket('${esc(m.id)}')">
       <div class="card-question">${esc(m.question)}</div>
@@ -636,6 +641,7 @@ function renderFeed() {
         <span class="badge cat-${catClass(m.category)}">${esc(m.category || "Unknown")}</span>
         <span class="badge conf-${m.best_confidence}">${m.best_confidence.toUpperCase()}</span>
         ${llmConf}
+        ${divBadge}
       </div>
       <div class="card-stats">
         <span class="card-price">${m.price != null ? m.price.toFixed(3) : "—"}</span>
