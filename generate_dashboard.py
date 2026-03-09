@@ -612,11 +612,29 @@ function discoveryBanner(discovery, ticker) {
         <div class="signal-desc">Polymarket and ${t} have historically moved together with no clear lead on either side.</div>
       </div>
     </div>`;
+  if (divergence === "underreaction") return `
+    <div class="signal-banner sig-under">
+      <div class="signal-icon">&#x26A1;</div>
+      <div>
+        <div class="signal-label">Underreaction detected — Polymarket may be lagging</div>
+        <div class="signal-desc">${t} has moved but Polymarket odds haven't fully followed.
+        This gap may represent a tradeable opportunity if the financial move is informative.</div>
+      </div>
+    </div>`;
+  if (divergence === "overreaction") return `
+    <div class="signal-banner sig-over">
+      <div class="signal-icon">&#x26A0;</div>
+      <div>
+        <div class="signal-label">Overreaction detected — Polymarket odds may be stretched</div>
+        <div class="signal-desc">Polymarket has moved more than ${t} would suggest.
+        Odds may be pricing in more than the financial market supports.</div>
+      </div>
+    </div>`;
   return `
     <div class="signal-banner sig-none">
       <div class="signal-icon">&#x2014;</div>
       <div>
-        <div class="signal-label">No clear price signal</div>
+        <div class="signal-label">No clear discovery direction in historical movement</div>
         <div class="signal-desc">Insufficient data or no significant historical lead-lag relationship detected between this market and ${t}.</div>
       </div>
     </div>`;
