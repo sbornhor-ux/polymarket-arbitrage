@@ -11,6 +11,7 @@ Docs: https://docs.polymarket.com/#get-market
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any
@@ -23,6 +24,61 @@ _TIMEOUT = 15.0  # seconds
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def fetch_price_history(
+    token_id: str,
+    lookback_hours: int = 72,
+) -> list[dict]:
+    """
+    Fetch recent price history for a YES token directly from the CLOB API.
+
+    Args:
+        token_id: The Polymarket YES token ID (hex string).
+        lookback_hours: How many hours back to fetch (default 72).
+
+    Returns:
+        List of {"t": unix_ts, "p": float} dicts ordered oldest-first.
+        Returns empty list on any error.
+    """
+    end_ts = int(_utc_now().timestamp())
+    start_ts = int((_utc_now() - timedelta(hours=lookback_hours)).timestamp())
+    try:
+        with httpx.Client(base_url=_BASE, timeout=_TIMEOUT) as client:
+            resp = client.get(
+                "/prices-history",
+                params={
+                    "market": token_id,
+                    "interval": "1m",
+                    "startTs": start_ts,
+                    "endTs": end_ts,
+                    "fidelity": 1,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json().get("history", [])
+    except Exception:
+        return []
+
+
+def extract_yes_token_id(clob_token_ids_json: str) -> str | None:
+    """
+    Parse the clob_token_ids JSON string and return the YES token ID.
+
+    Args:
+        clob_token_ids_json: JSON string like '["0xabc...", "0xdef..."]'
+                             where index 0 is YES and index 1 is NO.
+
+    Returns:
+        YES token ID string, or None if unparseable.
+    """
+    try:
+        ids = json.loads(clob_token_ids_json)
+        if ids and isinstance(ids, list):
+            return str(ids[0])
+    except Exception:
+        pass
+    return None
 
 
 def fetch_market_raw(market_id: str, lookback_days: int = 30) -> dict[str, Any]:

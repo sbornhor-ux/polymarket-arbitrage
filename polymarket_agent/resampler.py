@@ -13,8 +13,8 @@ import pandas as pd
 from polymarket_agent.models import MarketSnapshot, ProbTick
 
 
-_RESAMPLE_RULE = "5min"
-_MAX_FFILL_PERIODS = 3  # 3 × 5m = 15m forward-fill limit
+_RESAMPLE_RULE = "15min"
+_MAX_FFILL_PERIODS = 2  # 2 × 15m = 30m forward-fill limit
 
 
 def resample_to_5m(snapshot: MarketSnapshot) -> MarketSnapshot:

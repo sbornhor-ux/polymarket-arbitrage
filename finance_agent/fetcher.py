@@ -52,12 +52,13 @@ def _fetch_aggs(
     timespan: str,
     from_: str,
     to: str,
+    multiplier: int = 1,
 ) -> list:
     """Return list of Agg objects, or empty list on failure."""
     try:
         return list(client.get_aggs(
             polygon_ticker,
-            multiplier=1,
+            multiplier=multiplier,
             timespan=timespan,
             from_=from_,
             to=to,
@@ -120,11 +121,16 @@ def fetch_series(
     now = pd.Timestamp.now("UTC")
     days_back = (now - earliest).days
     if days_back <= _MINUTE_MAX_DAYS:
+        # Use 15-minute bars for recent data (within 7 days) — matches
+        # the 15-minute Polymarket probability series resolution.
         timespan = "minute"
+        bar_multiplier = 15
     elif days_back <= _INTRADAY_MAX_DAYS:
         timespan = "hour"
+        bar_multiplier = 1
     else:
         timespan = "day"
+        bar_multiplier = 1
 
     from_str = earliest.strftime("%Y-%m-%d")
     to_str = (latest + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
@@ -134,7 +140,7 @@ def fetch_series(
 
     client = _get_client()
 
-    aggs = _fetch_aggs(client, primary, timespan, from_str, to_str)
+    aggs = _fetch_aggs(client, primary, timespan, from_str, to_str, multiplier=bar_multiplier)
     df = _aggs_to_df(aggs)
 
     if df is None and fallback:
@@ -142,7 +148,7 @@ def fetch_series(
             f"[finance_agent.fetcher] {primary} returned no data for {ticker}; "
             f"retrying with fallback {fallback}"
         )
-        aggs = _fetch_aggs(client, fallback, timespan, from_str, to_str)
+        aggs = _fetch_aggs(client, fallback, timespan, from_str, to_str, multiplier=bar_multiplier)
         df = _aggs_to_df(aggs)
 
     return df

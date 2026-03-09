@@ -120,7 +120,8 @@ def export_csv(db_path: Path) -> Path:
         SELECT m.market_id, m.question, m.description, m.category, m.slug,
                m.end_date, m.first_seen,
                m.volume, m.liquidity, m.volume24hr, m.volume1wk, m.volume1mo,
-               m.one_month_price_change, m.last_trade_price, m.spread
+               m.one_month_price_change, m.last_trade_price, m.spread,
+               m.clob_token_ids
         FROM markets m
         ORDER BY m.volume24hr DESC NULLS LAST
     """).fetchall()
@@ -150,7 +151,7 @@ def export_csv(db_path: Path) -> Path:
         ['market_id', 'question', 'category', 'market_slug', 'end_date', 'first_seen',
          'volume', 'liquidity', 'volume24hr', 'volume1wk', 'volume1mo',
          'one_month_price_change', 'last_trade_price', 'spread',
-         'current_price', 'current_as_of'] +
+         'current_price', 'current_as_of', 'clob_token_ids'] +
         [f'price_t_minus_{abs(h):02d}' for h in tminus] +
         [f'price_t_plus_{h:02d}' for h in tplus]
     )
@@ -182,6 +183,7 @@ def export_csv(db_path: Path) -> Path:
                 'spread': m['spread'],
                 'current_price': cur_price,
                 'current_as_of': cur_ts,
+                'clob_token_ids': m['clob_token_ids'] or '',
             }
             for h in tminus:
                 row[f'price_t_minus_{abs(h):02d}'] = g.get(h)
@@ -205,6 +207,7 @@ def run_finance_agent(csv_path: Path) -> Path:
     from polymarket_agent.resampler import resample_to_5m
     from polymarket_agent.swing_detector import detect_swings
     from polymarket_agent.relevance_screener import classify_relevance
+    from polymarket_agent.client import fetch_price_history, extract_yes_token_id
     from finance_agent import get_window_stats
     from instrument_selector import select_instruments
 
@@ -216,8 +219,25 @@ def run_finance_agent(csv_path: Path) -> Path:
     all_selections = []
     skipped = 0
 
+    clob_fetched = 0
+    clob_failed = 0
+
     for i, raw in enumerate(raw_markets):
         try:
+            # Fetch 72-hour 15-minute price history from Polymarket CLOB API,
+            # replacing the 24-hour hourly history stored in the DB/CSV.
+            clob_token_ids_str = raw.get('metadata', {}).get('clob_token_ids', '') or ''
+            yes_token_id = extract_yes_token_id(clob_token_ids_str)
+            if yes_token_id:
+                fresh_history = fetch_price_history(yes_token_id, lookback_hours=72)
+                if fresh_history:
+                    raw['history'] = fresh_history
+                    clob_fetched += 1
+                else:
+                    clob_failed += 1
+            else:
+                clob_failed += 1
+
             snap = normalize_market(raw)
             snap = resample_to_5m(snap)
             snap = detect_swings(snap)
@@ -278,6 +298,7 @@ def run_finance_agent(csv_path: Path) -> Path:
             skipped += 1
             continue
 
+    log.info(f"  CLOB 72h history: {clob_fetched} fetched, {clob_failed} fell back to CSV data")
     log.info(f"  Processed {len(snapshots)} markets, {skipped} skipped (low relevance/no swings)")
     log.info(f"  Generated {len(all_stats)} finance data points across {len(all_selections)} selections")
 
