@@ -464,6 +464,8 @@ body {
 .signal-banner.sig-fin   { background: #2b1b56; border: 1px solid #8957e540; }
 .signal-banner.sig-both  { background: #0b2e2a; border: 1px solid #39d35340; }
 .signal-banner.sig-none  { background: #1c2128; border: 1px solid #30363d; }
+.signal-banner.sig-under { background: #1a2e12; border: 1px solid #3fb95040; }
+.signal-banner.sig-over  { background: #2e1a1a; border: 1px solid #f8514940; }
 .signal-icon  { font-size: 22px; flex-shrink: 0; }
 .signal-label { font-size: 13px; font-weight: 700; margin-bottom: 3px; }
 .signal-desc  { font-size: 12px; color: #8b949e; line-height: 1.4; }
@@ -471,6 +473,8 @@ body {
 .signal-banner.sig-fin .signal-label   { color: #bc8cff; }
 .signal-banner.sig-both .signal-label  { color: #3fb950; }
 .signal-banner.sig-none .signal-label  { color: #7d8590; }
+.signal-banner.sig-under .signal-label { color: #3fb950; }
+.signal-banner.sig-over .signal-label  { color: #f85149; }
 
 /* Empty state */
 .empty-state {
@@ -582,7 +586,7 @@ function discLabel(d) {
   return { cls:"disc-none", label: d };
 }
 
-function signalBanner(discovery, ticker) {
+function signalBanner(discovery, divergence, ticker) {
   const t = esc(ticker || "financial markets");
   if (discovery === "polymarket_leads") return `
     <div class="signal-banner sig-poly">
@@ -609,6 +613,24 @@ function signalBanner(discovery, ticker) {
         <div class="signal-label">Simultaneous movement — markets in sync</div>
         <div class="signal-desc">Polymarket and ${t} moved together at the same time.
         Strong co-movement but no clear information advantage on either side.</div>
+      </div>
+    </div>`;
+  if (divergence === "underreaction") return `
+    <div class="signal-banner sig-under">
+      <div class="signal-icon">&#x26A1;</div>
+      <div>
+        <div class="signal-label">Underreaction detected — Polymarket may be lagging</div>
+        <div class="signal-desc">${t} has moved but Polymarket odds haven't fully followed.
+        This gap may represent a tradeable opportunity if the financial move is informative.</div>
+      </div>
+    </div>`;
+  if (divergence === "overreaction") return `
+    <div class="signal-banner sig-over">
+      <div class="signal-icon">&#x26A0;</div>
+      <div>
+        <div class="signal-label">Overreaction detected — Polymarket odds may be stretched</div>
+        <div class="signal-desc">Polymarket has moved more than ${t} would suggest.
+        Odds may be pricing in more than the financial market supports.</div>
       </div>
     </div>`;
   return `
@@ -874,8 +896,9 @@ function renderDetail(m) {
 
   // Arbitrage signal banner (uses best pair's discovery)
   const bestDiscovery = best ? best.discovery : "";
+  const bestDivergence = best ? best.divergence_direction : "";
   const bestTickerName = best ? best.ticker_name : "";
-  html = html.replace("__SIGNAL_BANNER__", signalBanner(bestDiscovery, bestTickerName));
+  html = html.replace("__SIGNAL_BANNER__", signalBanner(bestDiscovery, bestDivergence, bestTickerName));
 
   html += "</div>"; // detail-body
   document.getElementById("detail").innerHTML = html;
