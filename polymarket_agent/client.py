@@ -52,7 +52,7 @@ def fetch_price_history(
                     "interval": "1m",
                     "startTs": start_ts,
                     "endTs": end_ts,
-                    "fidelity": 1,
+                    "fidelity": 15,
                 },
             )
             resp.raise_for_status()
