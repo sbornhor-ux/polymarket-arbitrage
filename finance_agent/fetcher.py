@@ -119,13 +119,15 @@ def fetch_series(
     latest = max(ends) + pd.Timedelta(hours=1)
 
     now = pd.Timestamp.now("UTC")
-    days_back = (now - earliest).days
-    if days_back <= _MINUTE_MAX_DAYS:
-        # Use 15-minute bars for recent data (within 7 days) — matches
-        # the 15-minute Polymarket probability series resolution.
+    # Use swing recency (not the trailing baseline start) to pick granularity.
+    # This ensures we get 15-min bars when the swing window is recent, even
+    # though the trailing baseline fetch may extend further back.
+    swing_age_days = (now - latest).days
+    if swing_age_days <= _MINUTE_MAX_DAYS:
+        # 15-min bars — matches the Polymarket CLOB 15-min series resolution.
         timespan = "minute"
         bar_multiplier = 15
-    elif days_back <= _INTRADAY_MAX_DAYS:
+    elif (now - earliest).days <= _INTRADAY_MAX_DAYS:
         timespan = "hour"
         bar_multiplier = 1
     else:

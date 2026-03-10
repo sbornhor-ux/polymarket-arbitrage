@@ -224,20 +224,7 @@ def run_finance_agent(csv_path: Path) -> Path:
 
     for i, raw in enumerate(raw_markets):
         try:
-            # Fetch the 72 hours of 15-minute price history ending at now
-            # (the moment the pipeline runs and detects the swing).
-            clob_token_ids_str = raw.get('metadata', {}).get('clob_token_ids', '') or ''
-            yes_token_id = extract_yes_token_id(clob_token_ids_str)
-            if yes_token_id:
-                fresh_history = fetch_price_history(yes_token_id, lookback_hours=72)
-                if fresh_history:
-                    raw['history'] = fresh_history
-                    clob_fetched += 1
-                else:
-                    clob_failed += 1
-            else:
-                clob_failed += 1
-
+            # First pass: detect swings on CSV history to find when the swing occurred
             snap = normalize_market(raw)
             snap = resample_to_5m(snap)
             snap = detect_swings(snap)
@@ -245,8 +232,33 @@ def run_finance_agent(csv_path: Path) -> Path:
             rel_score = snap.financial_relevance_score or 0.0
             tier = classify_relevance(rel_score)
 
-            # Only run finance agent on medium+ relevance markets with detected swings
+            # Filter gate: skip low relevance or no swings
             if tier == 'low' or not snap.swings:
+                skipped += 1
+                snapshots.append(snap)
+                continue
+
+            # Market passed the filter gate — fetch 72h of CLOB data ending now
+            # (the moment the market passes the gate is the anchor for both
+            # Polymarket price history and the financial series window)
+            clob_token_ids_str = raw.get('metadata', {}).get('clob_token_ids', '') or ''
+            yes_token_id = extract_yes_token_id(clob_token_ids_str)
+            if yes_token_id:
+                fresh_history = fetch_price_history(yes_token_id, lookback_hours=72)
+                if fresh_history:
+                    raw['history'] = fresh_history
+                    # Re-run normalization and swing detection on the CLOB data
+                    snap = normalize_market(raw)
+                    snap = resample_to_5m(snap)
+                    snap = detect_swings(snap)
+                    clob_fetched += 1
+                else:
+                    clob_failed += 1
+            else:
+                clob_failed += 1
+
+            # Re-check after CLOB refresh (CLOB window may show no swing)
+            if not snap.swings:
                 skipped += 1
                 snapshots.append(snap)
                 continue
